@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.infrastructure.db import get_db
 
 router = APIRouter(tags=["health"])
 
