@@ -1,0 +1,21 @@
+# Локальная БД для разработки. Учётные данные — только для dev, не секрет.
+# Запуск: docker compose up -d --wait  (из корня репозитория)
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: adrobot
+      POSTGRES_PASSWORD: adrobot
+      POSTGRES_DB: adrobot
+    ports:
+      - "127.0.0.1:15433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adrobot -d adrobot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
