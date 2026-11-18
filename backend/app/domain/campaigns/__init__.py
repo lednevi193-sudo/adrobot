@@ -4,7 +4,12 @@
 а не из внутренних модулей — их раскладка может меняться.
 """
 
-from app.domain.campaigns.model.assignment import AssignmentStatus, OfferAssignment
+from app.domain.campaigns.model.assignment import (
+    AssignmentStatus,
+    DesiredState,
+    OfferAssignment,
+    PublishedState,
+)
 from app.domain.campaigns.creation.blueprint import (
     CampaignBlueprint,
     GeoRedirectStreamSpec,
@@ -21,12 +26,14 @@ __all__ = [
     "CampaignBlueprint",
     "Change",
     "ChangeKind",
+    "DesiredState",
     "GeoRedirectStreamSpec",
     "KeitaroCampaign",
     "KeitaroStream",
     "OfferAssignment",
     "OffersStreamSpec",
     "PublishedOffer",
+    "PublishedState",
     "Stream",
     "StreamKind",
 ]

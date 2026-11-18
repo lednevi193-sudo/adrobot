@@ -92,8 +92,17 @@ app/
 ├── config.py                       настройки из .env
 ├── main.py                         сборка приложения FastAPI
 ├── api/                            HTTP: роутеры, DTO
+├── application/
+│   ├── ports.py                    CampaignRepository (Protocol)
+│   └── errors.py                   ConcurrencyConflict, CampaignNotFound, …
 ├── infrastructure/
-│   └── db.py                       engine, сессии
+│   ├── db.py                       engine, сессии
+│   └── persistence/
+│       ├── base.py                 Base + правила именования ограничений
+│       ├── records.py              CampaignRecord — строка таблицы campaigns
+│       ├── documents.py            схема JSONB-документа (Pydantic)
+│       ├── campaign_mapper.py      строка <-> агрегат
+│       └── campaign_repository.py  SqlCampaignRepository
 └── domain/
     ├── common/
     │   ├── ids.py                  OfferId, StreamId, CampaignId
@@ -126,11 +135,21 @@ app/
 Агрегат кампании — одна строка: данные кампании в колонках, потоки с привязками — документом в JSONB. Репозиторий переводит строку в агрегат и обратно и всегда записывает документ целиком.
 
 ```
-campaigns  (id = keitaro_id PK, name, alias, domain_url, created_by_us, fetched_at,
+campaigns  (id = keitaro_id PK, name, alias, domain_url, created_by_us,
+            streams JSONB,
             version,                -- оптимистическая блокировка (version_id_col)
-            streams JSONB)
-offers     (id = keitaro_id PK, name, state)   -- кеш справочника для поиска
+            created_at, updated_at)
 ```
+
+Отдельной таблицы офферов нет: имя оффера хранится снимком в привязке, а поиск офферов идёт в Keitaro (FR-1.2). Кеш справочника добавим, только если поиск в Keitaro окажется медленным.
+
+- **Схема** — миграции Alembic (`backend/migrations`), первая создаёт `campaigns`. Применить: `alembic upgrade head`.
+- **Документ** описан Pydantic-моделями (`infrastructure/persistence/documents.py`) и валидируется при чтении; `schema_version` — для будущих изменений формата.
+- **Оптимистическая блокировка** — две линии защиты:
+  1. версия агрегата, прочитанная раньше, не совпадает с версией строки → `ConcurrencyConflict` сразу;
+  2. два запроса прочитали одну версию одновременно → `UPDATE … WHERE version = :прочитанная` второго затрагивает 0 строк → `StaleDataError` → `ConcurrencyConflict`.
+- **Транзакция** — граница сценария приложения: репозиторий делает `flush` (чтобы ошибки всплывали в нём), `commit` — сценарий.
+- **Интеграционные тесты** (`tests/infrastructure`) идут на отдельной БД `adrobot_test` в том же контейнере, схема создаётся теми же миграциями; без запущенного Postgres тесты пропускаются.
 
 ```json
 {
