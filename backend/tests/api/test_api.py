@@ -55,6 +55,15 @@ def test_list_ours_and_all(client: TestClient, world: World, created: dict) -> N
     assert len(client.get("/api/campaigns", params={"all": True}).json()) == 2
 
 
+def test_open_returns_campaign_and_keitaro_changes(client: TestClient, world: World, created: dict) -> None:
+    client.delete(url(created, f"/offers/{FLEXACIL.id}"))  # черновик
+    world.keitaro.delete_campaign(created["id"])
+
+    body = client.get(f"/api/campaigns/{created['id']}").json()
+    assert body["campaign"]["has_draft"]
+    assert body["keitaro_changes"] == ["кампания удалена в Keitaro"]
+
+
 def test_open_unknown_is_404(client: TestClient) -> None:
     r = client.get("/api/campaigns/404")
     assert (r.status_code, r.json()["code"]) == (404, "campaign_not_found")

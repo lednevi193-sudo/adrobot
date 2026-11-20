@@ -19,6 +19,7 @@ from app.domain.campaigns.model.campaign import Campaign, is_our_name
 from app.domain.campaigns.model.draft import DraftChange, DraftChangeKind
 from app.domain.campaigns.sync.snapshots import KeitaroCampaign, KeitaroStream, PublishedOffer
 from app.domain.campaigns.model.stream import Stream, StreamKind
+from app.domain.campaigns.sync.keitaro_changes import changes_in_keitaro
 
 __all__ = [
     "AssignmentStatus",
@@ -36,5 +37,6 @@ __all__ = [
     "PublishedState",
     "Stream",
     "StreamKind",
+    "changes_in_keitaro",
     "is_our_name",
 ]

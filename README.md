@@ -1,54 +1,116 @@
-# Adrobot — обёртка над Keitaro
+# Adrobot — обёртка над трекером Keitaro
 
-Создаватор кампаний и редактор потоков с офферами поверх Keitaro Admin API.
-Что и зачем — [docs/requirements.md](docs/requirements.md), как устроено — [docs/domain-model.md](docs/domain-model.md).
+Создаватор кампаний и редактор офферов в потоках поверх Keitaro Admin API. Изменения копятся черновиком в своей БД и публикуются в Keitaro по кнопке Push.
 
-**Статус:** готов backend (FastAPI, HTTP API). Фронтенд (Vue 3 + Vite, NFR-1) ещё не начат — пока работа идёт через Swagger.
+- Требования: [docs/requirements.md](docs/requirements.md)
+- Доменная модель, единый язык, HTTP API, фронтенд: [docs/domain-model.md](docs/domain-model.md)
 
-## Требования
+Стек: FastAPI + SQLAlchemy 2 + Alembic + PostgreSQL (Docker) на бэкенде, Vue 3 + TypeScript + Naive UI + Vite на фронте.
 
-- Python ≥ 3.12
-- Docker (локальный Postgres)
+## Что нужно
 
-## Запуск
+- Python 3.12+
+- Node.js 22+ (Vite 8)
+- Docker (для Postgres)
 
-Из корня репозитория:
+Команды ниже — для PowerShell, из корня репозитория.
 
-```bash
-cp .env.example .env        # заполнить KEITARO_API_KEY и CAMPAIGN_PREFIX
-docker compose up -d --wait # Postgres на 127.0.0.1:15433
+## 1. Настройки
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-Дальше — из `backend/` (там `alembic.ini` и `pyproject.toml`; `.env` читается из корня репозитория):
+В `.env` заполните `KEITARO_API_KEY` и `CAMPAIGN_PREFIX` (например, `test_ivanov_`). Остальное уже настроено на стенд и локальный Postgres. Файл `.env` в git не попадает.
 
-```bash
-cd backend
-python -m venv .venv
-.venv/Scripts/pip install -r requirements-dev.txt   # Linux/macOS: .venv/bin/pip
-.venv/Scripts/alembic upgrade head
-.venv/Scripts/uvicorn app.main:app --reload
+`CAMPAIGN_PREFIX` обязателен: с пустым значением или с плейсхолдером из `.env.example` бэкенд не стартует.
+
+> **Стенд Keitaro общий.** Push разрешён только в кампании с вашим `CAMPAIGN_PREFIX` — бэкенд отклоняет остальные (403). Чужие кампании можно открывать и редактировать черновиком.
+
+## 2. База данных
+
+```powershell
+docker compose up -d --wait
 ```
 
-- Swagger: http://localhost:8000/docs
-- Проверка: http://localhost:8000/api/health
+Postgres слушает `127.0.0.1:15433`, данные лежат в томе `pgdata`.
 
-`CAMPAIGN_PREFIX` обязателен: стенд Keitaro общий, обёртка показывает и публикует только кампании со своим префиксом.
-Без него (или с плейсхолдером из `.env.example`) приложение не стартует.
+## 3. Бэкенд
+
+```powershell
+python -m venv backend\.venv
+```
+
+```powershell
+backend\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
+```
+
+```powershell
+cd backend; .venv\Scripts\python -m alembic upgrade head; cd ..
+```
+
+```powershell
+backend\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
+
+Swagger — http://127.0.0.1:8000/docs, проверка БД — http://127.0.0.1:8000/api/health.
+
+## 4. Фронтенд
+
+```powershell
+npm --prefix frontend install
+```
+
+Разработка (бэкенд должен быть запущен — Vite проксирует `/api` на `127.0.0.1:8000`):
+
+```powershell
+npm --prefix frontend run dev
+```
+
+Открыть http://127.0.0.1:5173.
+
+Сборка: собранную статику (`frontend/dist`) раздаёт сам FastAPI — после сборки всё приложение доступно на http://127.0.0.1:8000.
+
+```powershell
+npm --prefix frontend run build
+```
 
 ## Тесты
 
-```bash
-cd backend
-.venv/Scripts/pytest
+Бэкенд — домен, сценарии, HTTP API на фейках, ACL Keitaro на заглушке HTTP. `.env` для тестов не нужен. Тесты хранения работают с настоящим Postgres из `docker compose` (отдельная БД `adrobot_test`); если он не запущен, они пропускаются.
+
+```powershell
+cd backend; .venv\Scripts\python -m pytest; cd ..
 ```
 
-- `.env` для тестов не нужен: настройки подменяются в `tests/conftest.py`.
-- Интеграционные тесты хранения (`tests/infrastructure`) идут на БД `adrobot_test` в Postgres из docker compose
-  (создаётся автоматически, адрес — `TEST_DATABASE_URL`). Если Postgres не запущен, они пропускаются (skip).
-- Остальные тесты работают на фейках портов, без сети и БД.
+Фронтенд — Vitest: слой API-клиента, обработка ошибок, ключевые компоненты.
+
+```powershell
+npm --prefix frontend test
+```
+
+Проверка типов без сборки:
+
+```powershell
+npm --prefix frontend run typecheck
+```
 
 ## Конкурентная правка
 
-`CampaignView.version` — версия кампании. Команды редактора и Fetch принимают её в заголовке `If-Match`:
-если кампанию успели изменить в другой вкладке, ответ — 409 `concurrency_conflict`, и подтверждение
-(Cancel, Fetch с `discard_drafts`) не применится к черновику, которого пользователь не видел.
+`CampaignView.version` — версия кампании. Команды редактора и Fetch принимают её в заголовке `If-Match`: если кампанию успели изменить в другой вкладке, ответ — 409 `concurrency_conflict`, и подтверждение (Cancel, Fetch с `discard_drafts`) не применится к черновику, которого пользователь не видел. Заголовок необязателен.
+
+## Структура
+
+```
+backend/app/
+  domain/          агрегат «Кампания», веса, синхронизация с Keitaro — без БД и HTTP
+  application/     сценарии: создаватор, редактор, порты (интерфейсы) к БД и Keitaro
+  infrastructure/  Postgres (SQLAlchemy, Alembic), ACL к Keitaro (httpx)
+  api/             FastAPI: роутеры, DTO, перевод ошибок в HTTP
+  spa.py           раздача frontend/dist
+frontend/src/
+  shared/          HTTP-клиент, ApiError, общие компоненты
+  offers/          автодополнение офферов
+  creator/         создаватор
+  editor/          список кампаний и редактор потоков
+```

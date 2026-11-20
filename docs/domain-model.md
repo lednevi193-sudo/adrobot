@@ -47,6 +47,7 @@
 | `KeitaroCampaign`, `KeitaroStream` | «Что сейчас в Keitaro». Keitaro — часть языка пользователя («в Keitaro сейчас 30%»), поэтому имя внешней системы здесь уместно |
 | `PublishedOffer` | Строка раздачи потока в Keitaro: оффер и его вес |
 | `merge_published` | Таблица FR-2.3: что происходит с оффером, который пропал из Keitaro, появился в нём и т. д. |
+| `changes_in_keitaro` | «Что поменяли прямо в Keitaro» относительно опубликованного (черновик не в счёт) — предупреждение при открытии кампании с черновиком |
 
 ### `campaigns/creation` — создаватор
 
@@ -165,7 +166,7 @@ app/
 │   ├── editor/                     list, open, fetch, edit (команды), push
 │   └── errors.py                   ConcurrencyConflict, CampaignNotFound, KeitaroError, …
 ├── infrastructure/
-│   ├── db.py                       engine, сессии
+│   ├── db.py                       engine, сессии (ленивые: импорт без .env)
 │   ├── keitaro/                    ACL к Keitaro (раздел 9)
 │   │   ├── client.py               транспорт: заголовки, таймаут, ошибки -> KeitaroError
 │   │   ├── schemas.py              форма ответов Keitaro (Pydantic, только нужные поля)
@@ -279,8 +280,8 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 |---|---|
 | `create_campaign` | оффер из Keitaro, `CampaignBlueprint` (ошибки формы — до Keitaro) → кампания → 2 потока → снимок → `repo.add` → commit |
 | `search_offers` | активные офферы, по ID и подстроке названия, не больше 20 |
-| `list_campaigns` | список из Keitaro, по умолчанию только наши (`is_our_name`), новые первыми |
-| `open_campaign` | из БД; впервые — из Keitaro с сохранением; гонка двух открытий — берём уже сохранённую |
+| `list_campaigns` | наши (`is_our_name`) — из нашей БД без обращения к Keitaro; все — из Keitaro; новые первыми. Наша кампания, созданная прямо в Keitaro, попадает в список после первого открытия по ID |
+| `open_campaign` | впервые — импорт из Keitaro (гонка двух открытий — берём уже сохранённую). Дальше каждое открытие сверяется с Keitaro (`changes_in_keitaro`): без черновика — синхронизация как Fetch, запись в БД только при изменениях; с черновиком — кампания не трогается, список изменений уходит пользователю (`keitaro_changes`); удалённая в Keitaro — показываем то, что знаем |
 | `fetch_streams` | снимок Keitaro → `sync_from_keitaro(discard_drafts)` → save. При черновике без подтверждения — `CampaignHasDrafts`, ничего не сохраняется |
 | `edit_stream.*` | add (имя оффера — из Keitaro, не от клиента), remove, bring_back, pin, unpin, cancel: загрузить → команда корня → save |
 | `push_stream` | только наша кампания → `offers_to_publish` → `publish_offers` → повторное чтение и сверка → `mark_published` → save |
@@ -304,9 +305,9 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | Маршрут | Сценарий |
 |---|---|
 | `GET /offers?q=` | автодополнение |
-| `GET /campaigns?all=false` | список (по умолчанию наши) |
+| `GET /campaigns?all=false` | список: наши — из БД, `all=true` — все из Keitaro |
 | `POST /campaigns` → 201 | создаватор |
-| `GET /campaigns/{id}` | открыть |
+| `GET /campaigns/{id}` → `{campaign, keitaro_changes}` | открыть со сверкой с Keitaro |
 | `POST /campaigns/{id}/fetch` `{discard_drafts}` | Fetch streams |
 | `GET …/streams/{sid}/draft` | изменения для подтверждения Cancel |
 | `POST …/streams/{sid}/offers`, `DELETE …/offers/{oid}` | Add, Remove |
@@ -331,3 +332,27 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | прочие `ApplicationError` | 500 |
 
 Эндпоинты — обычные `def`: FastAPI выполняет их в пуле потоков, синхронные SQLAlchemy и httpx на время I/O отпускают GIL. Тесты (`tests/api`) — `TestClient` с `app.dependency_overrides` на фейки (≈ `WebApplicationFactory`).
+
+## 12. Фронтенд
+
+Vue 3 + TypeScript + Naive UI, сборка Vite (`frontend/`). Фронт — тонкий клиент HTTP API из раздела 11: правил домена (веса, состояния, «жёлтый ли поток», `push_blocker`) в нём нет, он только показывает присланный `CampaignView`.
+
+```
+frontend/src/
+  shared/api/   http.ts (единственный fetch, ≈ typed HttpClient), apiError.ts (ApiError{status, code, message, body}), errorTitle.ts
+  shared/ui/    ErrorAlert — заголовок по статусу, message бэкенда, differences после Push
+  offers/       OfferPicker — автодополнение «[id] name» для создаватора и Add offer
+  creator/      CreatorPage, fieldErrors (code -> поле формы)
+  editor/       api/ (DTO 1:1 со schemas.py, клиенты), useCampaignEditor, list/, page/, stream/, draft/
+frontend/tests/ повторяет src/
+```
+
+| Решение | Почему |
+|---|---|
+| Состояние редактора — composable `useCampaignEditor` (≈ scoped-сервис страницы), без глобального store | Источник истины — сервер: каждая команда возвращает `CampaignView`, composable кладёт его в один `ref` |
+| DTO описаны вручную в `editor/api/types.ts` | Контракт маленький; генератор (≈ NSwag) не окупается |
+| Ошибка API — `ApiError` с `code` из тела | Логика фронта ветвится по `code` (`campaign_has_drafts`, `invalid_geo`…), текст для пользователя — `message` бэкенда |
+| Fetch при черновике: 409 → окно со списком `changes` → повтор с `discard_drafts: true` | FR-2.3a; то же окно (`ConfirmDiscardModal`) — для Cancel по `GET …/draft` (FR-2.10a) |
+| Маршруты `/campaigns`, `/campaigns/:id`, `/create` | Список — часть редактора (FR-2.1), как `list_campaigns` в `application/editor` |
+
+**Запуск.** Разработка: бэкенд на :8000 и `npm --prefix frontend run dev` (Vite на :5173 проксирует `/api` на FastAPI). Прод: `npm --prefix frontend run build`, и `frontend/dist` раздаёт сам FastAPI (`app/spa.py`, ≈ `UseStaticFiles` + `MapFallbackToFile`): файл из `dist` или `index.html` для маршрутов SPA; `/api/*` и `/docs` не перехватываются. Тесты — `npm --prefix frontend test` (Vitest + Vue Test Utils, jsdom).
