@@ -39,6 +39,51 @@ class KeitaroUnavailable(KeitaroError):
     code = "keitaro_unavailable"
 
 
+class OfferNotFound(ApplicationError):
+    code = "offer_not_found"
+
+    def __init__(self, offer_id: int) -> None:
+        super().__init__(f"Оффер {offer_id} не найден среди активных офферов Keitaro")
+
+
+class CampaignCreationFailed(ApplicationError):
+    """Создание не удалось; созданное в Keitaro откачено (FR-1.6), если compensated."""
+
+    code = "campaign_creation_failed"
+
+    def __init__(self, reason: str, *, compensated: bool) -> None:
+        tail = (
+            "Созданная кампания перенесена в архив Keitaro."
+            if compensated
+            else "Откатить кампанию в Keitaro не удалось — удалите её вручную."
+        )
+        super().__init__(f"Кампанию создать не удалось: {reason}. {tail}")
+        self.compensated = compensated
+
+
+class NotOurCampaign(ApplicationError):
+    code = "not_our_campaign"
+
+    def __init__(self, campaign_id: int) -> None:
+        super().__init__(
+            f"Кампания {campaign_id} не наша (нет префикса CAMPAIGN_PREFIX): публиковать в неё нельзя, "
+            "стенд общий"
+        )
+
+
+class PushNotConfirmed(ApplicationError):
+    """После Push в Keitaro оказалось не то, что отправили (FR-2.13 п. 3). Черновик сохранён."""
+
+    code = "push_not_confirmed"
+
+    def __init__(self, stream_id: int, differences: list[str]) -> None:
+        super().__init__(
+            f"Keitaro принял Push потока {stream_id}, но опубликовал другое: {'; '.join(differences)}. "
+            "Черновик сохранён — проверьте поток и повторите Push"
+        )
+        self.differences = differences
+
+
 class ConcurrencyConflict(ApplicationError):
     code = "concurrency_conflict"
 

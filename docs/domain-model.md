@@ -152,7 +152,11 @@ app/
 ├── application/
 │   ├── ports/                      один порт — один модуль (Protocol)
 │   │   ├── campaign_repository.py  CampaignRepository
-│   │   └── keitaro_gateway.py      KeitaroGateway, CampaignSummary
+│   │   ├── keitaro_gateway.py      KeitaroGateway, CampaignSummary
+│   │   └── unit_of_work.py         UnitOfWork (commit/rollback) — Session подходит как есть
+│   ├── creator/create_campaign.py  создаватор с компенсацией (раздел 10)
+│   ├── offers/search_offers.py     автодополнение и поиск выбранного оффера
+│   ├── editor/                     list, open, fetch, edit (команды), push
 │   └── errors.py                   ConcurrencyConflict, CampaignNotFound, KeitaroError, …
 ├── infrastructure/
 │   ├── db.py                       engine, сессии
@@ -193,7 +197,7 @@ app/
             └── blueprint.py        чертёж новой кампании для создаватора
 ```
 
-Тесты повторяют эту раскладку: `tests/domain/campaigns/…`, `tests/infrastructure/keitaro/…`. Фейки портов — в `tests/fakes/`.
+Тесты повторяют эту раскладку: `tests/domain/campaigns/…`, `tests/infrastructure/keitaro/…`. Сценарии — `tests/application/…` на фейках портов (`tests/fakes/`).
 
 ## 8. Хранение
 
@@ -260,3 +264,26 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 **Сознательно не делаем:** повторы запросов (POST не идемпотентен, а повтор PUT с весами оставим пользователю — кнопка Push), кеш справочника офферов (один запрос на Fetch).
 
 **Тесты:** `tests/infrastructure/keitaro` — `httpx.MockTransport` (≈ свой `HttpMessageHandler`) с JSON в форме стенда; `tests/fakes/keitaro_gateway.py` — Keitaro в памяти для сценариев приложения, с `fail_on` для проверки компенсации FR-1.6.
+
+## 10. Сценарии приложения
+
+Сценарий — функция с явными зависимостями-портами: `push_stream(repo, keitaro, uow, campaign_id, stream_id, prefix=…)`. Внедрение — `Depends` на шаге API; классы-хендлеры в духе MediatR не вводим. Сценарий задаёт границу транзакции (`uow.commit()`), правила живут в домене.
+
+| Сценарий | Шаги |
+|---|---|
+| `create_campaign` | оффер из Keitaro, `CampaignBlueprint` (ошибки формы — до Keitaro) → кампания → 2 потока → снимок → `repo.add` → commit |
+| `search_offers` | активные офферы, по ID и подстроке названия, не больше 20 |
+| `list_campaigns` | список из Keitaro, по умолчанию только наши (`is_our_name`), новые первыми |
+| `open_campaign` | из БД; впервые — из Keitaro с сохранением; гонка двух открытий — берём уже сохранённую |
+| `fetch_streams` | снимок Keitaro → `sync_from_keitaro(discard_drafts)` → save. При черновике без подтверждения — `CampaignHasDrafts`, ничего не сохраняется |
+| `edit_stream.*` | add (имя оффера — из Keitaro, не от клиента), remove, bring_back, pin, unpin, cancel: загрузить → команда корня → save |
+| `push_stream` | только наша кампания → `offers_to_publish` → `publish_offers` → повторное чтение и сверка → `mark_published` → save |
+
+**Решения:**
+- **Создание — сага с компенсацией.** Распределённой транзакции между Keitaro и Postgres нет. Любой сбой после создания кампании (поток, повторное чтение, наша БД) → `rollback` + перенос кампании в архив Keitaro → `CampaignCreationFailed`. Если и компенсация не удалась — сообщение просит удалить кампанию вручную.
+- **Push — сначала Keitaro, потом БД.** Keitaro принял, а наш commit упал → поток остаётся жёлтым, ближайший Fetch выровняет его, закреплённые веса сохранятся (Q7).
+- **Сверка после Push (FR-2.13 п. 3)** не сошлась → `PushNotConfirmed` со списком расхождений, черновик не трогаем, поток жёлтый.
+- **Push только в наши кампании** (`NotOurCampaign`): стенд общий (NFR-4). Чужие кампании можно открыть, синхронизировать и редактировать черновиком, но не публиковать. Без `CAMPAIGN_PREFIX` «наших» нет вовсе.
+- Команды редактора Keitaro не трогают и проверку «наша ли» не делают: черновик безвреден.
+
+**Тесты:** `tests/fakes/campaign_repository.py` — репозиторий в памяти с семантикой Session: записи видны после commit, rollback их выбрасывает, `get` отдаёт копию, версии как у `version_id_col`. Поэтому тесты проверяют и «в БД ничего не попало», а не только вызовы.

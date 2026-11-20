@@ -14,6 +14,14 @@ from app.domain.common.ids import CampaignId, OfferId, StreamId
 from app.domain.offers.offer_ref import OfferRef
 
 
+def is_our_name(name: str, prefix: str) -> bool:
+    """«Наша» кампания — название с нашим префиксом (FR-2.1, Q5). Признак виден и в самом Keitaro.
+
+    Без настроенного префикса «наших» нет: так нельзя случайно править чужие кампании стенда (NFR-4).
+    """
+    return bool(prefix) and name.startswith(prefix)
+
+
 @dataclass(slots=True)
 class Campaign:
     id: CampaignId
@@ -37,8 +45,7 @@ class Campaign:
         return f"{self.domain_url.rstrip('/')}/{self.alias}"
 
     def is_ours(self, prefix: str) -> bool:
-        """«Наша» кампания — название с нашим префиксом (FR-2.1, Q5). Признак виден и в самом Keitaro."""
-        return bool(prefix) and self.name.startswith(prefix)
+        return is_our_name(self.name, prefix)
 
     # ---------- синхронизация (Fetch) ----------
 
