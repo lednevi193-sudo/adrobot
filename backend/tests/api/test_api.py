@@ -191,6 +191,20 @@ def test_view_carries_version_and_stale_if_match_is_409(client: TestClient, crea
     assert r.status_code == 200
 
 
+def test_can_cancel_tells_draft_from_pin_drift(client: TestClient, world: World, created: dict) -> None:
+    sid = created["streams"][1]["id"]
+    client.post(url(created, "/offers"), json={"offer_id": OTHER.id})
+    view = client.put(url(created, f"/offers/{FLEXACIL.id}/pin"), json={"share": 70}).json()
+    assert view["streams"][1]["can_cancel"] is True
+
+    client.post(url(created, "/push"))
+    world.keitaro.edit_stream(sid, [PublishedOffer(FLEXACIL, 50), PublishedOffer(OTHER, 50)])
+    view = client.post(f"/api/campaigns/{created['id']}/fetch").json()
+
+    offers = view["streams"][1]
+    assert (offers["has_draft"], offers["can_cancel"]) == (True, False)  # жёлтый, но отменять нечего
+
+
 def test_malformed_if_match_is_400(client: TestClient, created: dict) -> None:
     r = client.post(url(created, "/cancel"), headers={"If-Match": "abc"})
     assert r.status_code == 400

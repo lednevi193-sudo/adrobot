@@ -90,5 +90,5 @@ class ConcurrencyConflict(ApplicationError):
     def __init__(self, campaign_id: int) -> None:
         super().__init__(
             f"Кампанию {campaign_id} только что изменили в другой вкладке или другим пользователем. "
-            "Обновите страницу и повторите действие"
+            "Проверьте актуальное состояние кампании и повторите действие"
         )

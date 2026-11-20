@@ -20,10 +20,20 @@ describe('StreamCard', () => {
     expect(w.find('[data-test=cancel]').attributes('disabled')).toBeDefined()
   })
 
-  it('черновик — жёлтый, Push доступен', () => {
-    const w = mountCard({ stream: stream({ has_draft: true }) })
+  it('черновик — жёлтый, Push и Cancel доступны', () => {
+    const w = mountCard({ stream: stream({ has_draft: true, can_cancel: true }) })
     expect(w.find('[data-test=stream-card]').classes()).toContain('draft')
-    expect(w.find('[data-test=draft-tag]').exists()).toBe(true)
+    expect(w.find('[data-test=draft-tag]').text()).toBe('черновик')
+    expect(w.find('[data-test=push]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-test=cancel]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-test=pin-drift]').exists()).toBe(false)
+  })
+
+  it('жёлтый без черновика (закреплённый вес поменяли в Keitaro) — подсказка, Cancel заблокирован', () => {
+    const w = mountCard({ stream: stream({ has_draft: true, can_cancel: false }) })
+    expect(w.find('[data-test=draft-tag]').text()).toBe('не как в Keitaro')
+    expect(w.find('[data-test=pin-drift]').text()).toContain('Unpin примет вес из Keitaro')
+    expect(w.find('[data-test=cancel]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-test=push]').attributes('disabled')).toBeUndefined()
   })
 

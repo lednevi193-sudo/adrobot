@@ -17,6 +17,7 @@ export const stream = (s: Partial<StreamView> = {}): StreamView => ({
   position: 2,
   editable: true,
   has_draft: false,
+  can_cancel: false,
   push_blocker: null,
   offers: [offer()],
   ...s,
@@ -29,6 +30,7 @@ export const campaign = (c: Partial<CampaignView> = {}): CampaignView => ({
   tracker_url: 'https://kylovoa.com/AbCd',
   is_ours: true,
   has_draft: false,
+  version: 3,
   streams: [stream({ id: 6, name: 'Geo → Google', position: 1, editable: false, offers: [] }), stream()],
   ...c,
 })

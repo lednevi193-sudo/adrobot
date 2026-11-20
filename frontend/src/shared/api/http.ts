@@ -9,12 +9,21 @@ const BASE = '/api'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-export async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+export interface RequestOptions {
+  /** Версия ресурса, которую видел пользователь: не совпала — бэкенд ответит 409 concurrency_conflict. */
+  ifMatch?: number
+}
+
+export async function request<T>(method: Method, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (options.ifMatch !== undefined) headers['If-Match'] = `"${options.ifMatch}"`
+
   let response: Response
   try {
     response = await fetch(BASE + path, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -39,9 +48,9 @@ async function readJson(response: Response): Promise<unknown> {
 
 export const http = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
-  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
-  delete: <T>(path: string) => request<T>('DELETE', path),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST', path, body, options),
+  put: <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT', path, body, options),
+  delete: <T>(path: string, options?: RequestOptions) => request<T>('DELETE', path, undefined, options),
 }
 
 /** Значение для query-строки — с экранированием. */

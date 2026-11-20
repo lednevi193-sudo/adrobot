@@ -30,8 +30,10 @@ export interface StreamView {
   position: number
   /** true — поток с офферами; false — любой другой, показываем только имя и позицию. */
   editable: boolean
-  /** Черновик: поток жёлтый (FR-2.5). */
+  /** Поток жёлтый: желаемое расходится с Keitaro (FR-2.5). */
   has_draft: boolean
+  /** Есть что отменить Cancel. has_draft без can_cancel — закреплённый вес поменяли в Keitaro (FR-2.9a). */
+  can_cancel: boolean
   /** Почему Push сейчас невозможен (FR-2.12), или null. */
   push_blocker: string | null
   offers: StreamOfferView[]
@@ -45,6 +47,8 @@ export interface CampaignView {
   /** Наша кампания — с префиксом CAMPAIGN_PREFIX (Q5). */
   is_ours: boolean
   has_draft: boolean
+  /** Версия кампании: уходит в If-Match с каждой командой — защита от правки из устаревшей вкладки. */
+  version: number
   streams: StreamView[]
 }
 

@@ -63,6 +63,9 @@ class StreamView(BaseModel):
     position: int
     editable: bool
     has_draft: bool
+    can_cancel: bool = Field(
+        description="Есть что отменить. has_draft без can_cancel — закреплённый вес разошёлся с Keitaro (FR-2.9a)"
+    )
     push_blocker: str | None = Field(description="Почему Push сейчас невозможен (FR-2.12) или None")
     offers: list[StreamOfferView]
 

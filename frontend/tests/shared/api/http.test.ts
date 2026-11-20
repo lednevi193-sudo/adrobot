@@ -21,6 +21,15 @@ describe('http', () => {
     expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
   })
 
+  it('ifMatch уходит заголовком If-Match в ETag-форме', async () => {
+    mockFetch(async () => jsonResponse(200, {}))
+    await http.post('/campaigns/1/streams/2/push', undefined, { ifMatch: 5 })
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!
+    expect(init?.headers).toEqual({ 'If-Match': '"5"' })
+    expect(init?.body).toBeUndefined()
+  })
+
   it('ошибку бэкенда бросает как ApiError с code/message', async () => {
     mockFetch(async () => jsonResponse(502, { code: 'keitaro_error', message: 'Keitaro ответил 500: boom' }))
     const error = await failure(http.get('/offers'))

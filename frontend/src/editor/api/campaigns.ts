@@ -12,7 +12,10 @@ export function openCampaign(id: number): Promise<OpenCampaignResponse> {
   return http.get(`/campaigns/${id}`)
 }
 
-/** 409 campaign_has_drafts (+ changes), если есть черновики и discardDrafts=false (FR-2.3a). */
-export function fetchStreams(id: number, discardDrafts = false): Promise<CampaignView> {
-  return http.post(`/campaigns/${id}/fetch`, { discard_drafts: discardDrafts })
+/**
+ * 409 campaign_has_drafts (+ changes), если есть черновики и discardDrafts=false (FR-2.3a).
+ * version — какую версию видел пользователь: с ней отбрасывается ровно показанный ему черновик.
+ */
+export function fetchStreams(id: number, discardDrafts = false, version?: number): Promise<CampaignView> {
+  return http.post(`/campaigns/${id}/fetch`, { discard_drafts: discardDrafts }, { ifMatch: version })
 }

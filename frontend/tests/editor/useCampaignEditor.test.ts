@@ -67,14 +67,16 @@ describe('useCampaignEditor', () => {
     expect(editor.lastError.value).toBeNull()
   })
 
-  it('подтверждённый Fetch шлёт discard_drafts=true', async () => {
+  it('подтверждённый Fetch шлёт discard_drafts=true и версию, которую видел пользователь', async () => {
     const view = campaign()
+    vi.mocked(campaignsApi.openCampaign).mockResolvedValue({ campaign: campaign({ version: 5 }), keitaro_changes: [] })
     vi.mocked(campaignsApi.fetchStreams).mockResolvedValue(view)
     const editor = useCampaignEditor(42)
+    await editor.load()
 
     expect(await editor.fetchStreams(true)).toEqual({ kind: 'done' })
 
-    expect(campaignsApi.fetchStreams).toHaveBeenCalledWith(42, true)
+    expect(campaignsApi.fetchStreams).toHaveBeenCalledWith(42, true, 5)
     expect(editor.campaign.value).toBe(view)
   })
 
@@ -96,6 +98,35 @@ describe('useCampaignEditor', () => {
 
     await editor.fetchStreams(true)
     expect(editor.keitaroChanges.value).toEqual([])
+  })
+
+  it('команда уходит с версией кампании из последнего ответа', async () => {
+    vi.mocked(campaignsApi.openCampaign).mockResolvedValue({ campaign: campaign({ version: 5 }), keitaro_changes: [] })
+    vi.mocked(streamsApi.removeOffer).mockResolvedValue(campaign({ version: 6 }))
+    vi.mocked(streamsApi.push).mockResolvedValue(campaign({ version: 7 }))
+    const editor = useCampaignEditor(42)
+    await editor.load()
+
+    await editor.stream.removeOffer(7, 18813)
+    await editor.stream.push(7)
+
+    expect(streamsApi.removeOffer).toHaveBeenCalledWith({ campaignId: 42, streamId: 7, version: 5 }, 18813)
+    expect(streamsApi.push).toHaveBeenCalledWith({ campaignId: 42, streamId: 7, version: 6 })
+  })
+
+  it('409 concurrency_conflict: ошибка у потока и свежая версия кампании с сервера', async () => {
+    const fresh = campaign({ version: 9 })
+    vi.mocked(campaignsApi.openCampaign)
+      .mockResolvedValueOnce({ campaign: campaign({ version: 5 }), keitaro_changes: [] })
+      .mockResolvedValueOnce({ campaign: fresh, keitaro_changes: [] })
+    vi.mocked(streamsApi.push).mockRejectedValue(new ApiError(409, 'concurrency_conflict', 'Кампанию изменили'))
+    const editor = useCampaignEditor(42)
+    await editor.load()
+
+    expect(await editor.stream.push(7)).toBe(false)
+
+    expect(editor.lastError.value).toMatchObject({ streamId: 7, error: { code: 'concurrency_conflict' } })
+    expect(editor.campaign.value).toBe(fresh)  // следующая команда уйдёт уже с version 9
   })
 
   it('Cancel берёт кампанию из CancelResponse', async () => {

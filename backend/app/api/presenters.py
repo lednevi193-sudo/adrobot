@@ -35,6 +35,7 @@ def stream_view(s: Stream) -> StreamView:
         position=s.position,
         editable=editable,
         has_draft=s.has_draft,
+        can_cancel=editable and bool(s.draft_changes()),
         push_blocker=_push_blocker(s) if editable else None,
         offers=[assignment_view(a) for a in sorted(s.assignments, key=lambda a: a.order)],
     )

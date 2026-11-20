@@ -34,6 +34,9 @@ function add() {
   newOfferId.value = null
 }
 
+/** Поток жёлтый, но отменять нечего: разошёлся только закреплённый вес (FR-2.9a). */
+const pinDrift = computed(() => props.stream.has_draft && !props.stream.can_cancel)
+
 const is = (action: string) => props.busy === `${action}:${props.stream.id}`
 </script>
 
@@ -46,13 +49,15 @@ const is = (action: string) => props.busy === `${action}:${props.stream.id}`
   >
     <template #header>
       <span>#{{ stream.position }} {{ stream.name }}</span>
-      <n-tag v-if="stream.has_draft" size="small" type="warning" class="tag" data-test="draft-tag">черновик</n-tag>
+      <n-tag v-if="stream.has_draft" size="small" type="warning" class="tag" data-test="draft-tag">
+        {{ stream.can_cancel ? 'черновик' : 'не как в Keitaro' }}
+      </n-tag>
     </template>
     <template #header-extra>
       <n-space size="small">
         <n-button
           size="small"
-          :disabled="!stream.has_draft"
+          :disabled="!stream.can_cancel"
           :loading="is('draft') || is('cancel')"
           data-test="cancel"
           @click="emit('cancel')"
@@ -75,6 +80,10 @@ const is = (action: string) => props.busy === `${action}:${props.stream.id}`
     <n-space vertical>
       <n-alert v-if="stream.push_blocker" type="warning" :show-icon="true" data-test="push-blocker">
         {{ stream.push_blocker }}
+      </n-alert>
+      <n-alert v-if="pinDrift" type="info" :show-icon="true" data-test="pin-drift">
+        Закреплённый вес отличается от веса в Keitaro — его поменяли в админке Keitaro.
+        Push вернёт в Keitaro закреплённый вес, Unpin примет вес из Keitaro.
       </n-alert>
       <ErrorAlert v-if="error" :error="error" @close="emit('clearError')" />
 

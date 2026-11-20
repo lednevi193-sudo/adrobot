@@ -14,6 +14,7 @@ import { streamsApi, type StreamRef } from './api/streams'
 import type { CampaignView, DraftChangeDto } from './api/types'
 
 export const CAMPAIGN_HAS_DRAFTS = 'campaign_has_drafts'
+export const CONCURRENCY_CONFLICT = 'concurrency_conflict'
 
 export interface EditorError {
   /** null — ошибка кампании целиком (открыть, Fetch). */
@@ -38,10 +39,23 @@ export function useCampaignEditor(campaignId: number) {
     try {
       return await call()
     } catch (e) {
-      lastError.value = { streamId, error: asApiError(e) }
+      const error = asApiError(e)
+      lastError.value = { streamId, error }
+      if (error.code === CONCURRENCY_CONFLICT) await refresh()
       return undefined
     } finally {
       busy.value = null
+    }
+  }
+
+  /** Кампанию изменили в другой вкладке: показать свежую версию, ошибка остаётся на экране. */
+  async function refresh(): Promise<void> {
+    try {
+      const opened = await openCampaign(campaignId)
+      campaign.value = opened.campaign
+      keitaroChanges.value = opened.keitaro_changes
+    } catch {
+      // не вышло — останется исходная ошибка конфликта, пользователь обновит страницу сам
     }
   }
 
@@ -52,7 +66,7 @@ export function useCampaignEditor(campaignId: number) {
     return view !== undefined
   }
 
-  const ref_ = (streamId: number): StreamRef => ({ campaignId, streamId })
+  const ref_ = (streamId: number): StreamRef => ({ campaignId, streamId, version: campaign.value?.version })
 
   /** Изменения в Keitaro, которые не подтянуты из-за черновика. Fetch их подтягивает — и список пустеет. */
   const keitaroChanges = ref<string[]>([])
@@ -70,7 +84,7 @@ export function useCampaignEditor(campaignId: number) {
     busy.value = 'fetch'
     lastError.value = null
     try {
-      campaign.value = await fetchStreamsApi(campaignId, discardDrafts)
+      campaign.value = await fetchStreamsApi(campaignId, discardDrafts, campaign.value?.version)
       keitaroChanges.value = []
       return { kind: 'done' }
     } catch (e) {
@@ -79,6 +93,7 @@ export function useCampaignEditor(campaignId: number) {
         return { kind: 'needs_confirmation', changes: error.detail<DraftChangeDto[]>('changes') ?? [] }
       }
       lastError.value = { streamId: null, error }
+      if (error.code === CONCURRENCY_CONFLICT) await refresh()
       return { kind: 'failed' }
     } finally {
       busy.value = null
