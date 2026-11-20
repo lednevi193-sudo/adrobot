@@ -68,10 +68,8 @@ def push_stream(
         # Оставляем запас четырёх HTTP-таймаутов на запись и независимую сверку.
         if not lease.is_live(clock() + timedelta(seconds=4 * request_timeout), lease_seconds):
             raise ConcurrencyConflict(campaign_id)
-        keitaro.publish_offers(stream_id, offers, current=current)
-        # Если проверка на стенде подтвердит, что ответ PUT совпадает с последующим GET,
-        # сверку можно делать по ответу PUT — минус ещё один запрос.
-        actual = keitaro.get_stream(stream_id)
+        # Ответ PUT — сохранённое Keitaro состояние (проверено на стенде), отдельный GET для сверки не нужен.
+        actual = keitaro.publish_offers(stream_id, offers, current=current)
         if actual.campaign_id != campaign_id:
             raise StreamNotInCampaign(stream_id)
         differences = _differences(offers, actual)

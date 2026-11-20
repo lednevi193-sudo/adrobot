@@ -281,7 +281,7 @@ def test_push_preserves_parallel_edits_of_another_stream(world: World, ours: Cam
     publish = world.keitaro.publish_offers
     def edit_during_publish(stream_id, offers, *, current=None):
         edit_stream.pin(world.repo, world.uow, ours.id, sid, FLEXACIL.id, 100)
-        publish(stream_id, offers, current=current)
+        return publish(stream_id, offers, current=current)
     monkeypatch.setattr(world.keitaro, 'publish_offers', edit_during_publish)
     result = push(world, ours)
     assert result.push_in_progress is None
@@ -295,11 +295,12 @@ def test_failed_old_push_does_not_clear_another_owners_marker(world: World, ours
     add_other(world, ours)
     publish = world.keitaro.publish_offers
     def replace_owner(stream_id, offers, *, current=None):
-        publish(stream_id, offers, current=current)
+        saved = publish(stream_id, offers, current=current)
         campaign = world.repo.get(ours.id)
         campaign.push_in_progress = PushLease(stream_id, datetime.now(UTC), 'another-owner')
         world.repo.save(campaign)
         world.uow.commit()
+        return saved
     monkeypatch.setattr(world.keitaro, 'publish_offers', replace_owner)
     with pytest.raises(ConcurrencyConflict):
         push(world, ours)
@@ -425,7 +426,7 @@ def test_push_rejects_stream_now_owned_by_another_campaign(world: World, ours: C
 
 def test_push_not_confirmed_keeps_draft(world: World, ours: Campaign, monkeypatch: pytest.MonkeyPatch) -> None:
     add_other(world, ours)
-    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: None)  # Keitaro «промолчал»
+    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: world.keitaro.get_stream(stream_id))  # Keitaro «промолчал»
 
     with pytest.raises(PushNotConfirmed) as exc:
         push(world, ours)

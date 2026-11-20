@@ -154,7 +154,7 @@ def test_push_not_confirmed_is_502_with_differences(
     client: TestClient, world: World, created: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client.post(url(created, "/offers"), json={"offer_id": OTHER.id})
-    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: None)
+    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: world.keitaro.get_stream(stream_id))
 
     r = client.post(url(created, "/push"))
     assert r.status_code == 502

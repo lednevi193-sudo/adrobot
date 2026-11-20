@@ -58,6 +58,9 @@ class FakeKeitaroGateway:
 
     def get_stream(self, stream_id: StreamId) -> KeitaroStreamState:
         self._call("get_stream")
+        return self._stream_state(stream_id)
+
+    def _stream_state(self, stream_id: StreamId) -> KeitaroStreamState:
         for campaign in self.campaigns.values():
             for stream in campaign.streams:
                 if stream.id == stream_id:
@@ -91,12 +94,13 @@ class FakeKeitaroGateway:
 
     def publish_offers(
         self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
-    ) -> None:
+    ) -> KeitaroStreamState:
         self._call("publish_offers")
         current = current if current is not None else self.get_stream(stream_id)
         sent = {o.offer.id for o in offers}
         self.inactive_offers[stream_id] = tuple(o for o in current.inactive_offers if o.offer_id not in sent)
         self.edit_stream(stream_id, offers)
+        return self._stream_state(stream_id)  # как ответ PUT: сохранённый поток, без записи в calls
 
     # ---------- для тестов: «правка руками в админке Keitaro» ----------
 

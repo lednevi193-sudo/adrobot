@@ -159,7 +159,7 @@ def test_missing_or_deleted_stream_is_not_in_campaign(stub: KeitaroStub) -> None
         stub.gateway().get_stream(StreamId(1332012))
 
 
-def test_full_push_makes_four_requests_and_ignores_put_response(stub: KeitaroStub) -> None:
+def test_full_push_makes_three_requests_and_reconciles_by_put_response(stub: KeitaroStub) -> None:
     import json
     from app.application.editor.push_stream import push_stream
     from tests.fakes.campaign_repository import FakeUnitOfWork, InMemoryCampaignRepository
@@ -176,7 +176,7 @@ def test_full_push_makes_four_requests_and_ignores_put_response(stub: KeitaroStu
         return httpx.Response(200, json=state)
     def put_stream(request):
         state['offers'] = json.loads(request.content)['offers']
-        return httpx.Response(200, json=OFFERS_STREAM)  # старое тело намеренно отличается от GET
+        return httpx.Response(200, json=state)  # как Keitaro: в ответе сохранённый поток
     stub.routes[('GET', '/admin_api/v1/streams/1332012')] = get_stream
     stub.routes[('PUT', '/admin_api/v1/streams/1332012')] = put_stream
     stub.requests.clear()
@@ -186,7 +186,7 @@ def test_full_push_makes_four_requests_and_ignores_put_response(stub: KeitaroStu
     assert not saved.has_draft and saved.push_in_progress is None
     assert [(r.method, r.url.path) for r in stub.requests] == [
         ('GET', f'/admin_api/v1/campaigns/{CID}'), ('GET', '/admin_api/v1/streams/1332012'),
-        ('PUT', '/admin_api/v1/streams/1332012'), ('GET', '/admin_api/v1/streams/1332012'),
+        ('PUT', '/admin_api/v1/streams/1332012'),  # сверка по ответу PUT, без второго GET
     ]
     assert state['offers'][-1] == {'offer_id': 17210, 'share': 0, 'state': 'disabled'}
 
@@ -291,3 +291,25 @@ def test_published_offer_wins_over_its_disabled_copy() -> None:
             {"offer_id": 17210, "share": 50, "state": "active"},
         ]
     }
+
+
+def test_push_detects_mismatch_in_put_response(stub: KeitaroStub) -> None:
+    """Keitaro сохранил не то, что отправили (видно по ответу PUT) -> PushNotConfirmed, черновик цел."""
+    import pytest as _pytest
+    from app.application.editor.push_stream import push_stream
+    from app.application.errors import PushNotConfirmed
+    from tests.fakes.campaign_repository import FakeUnitOfWork, InMemoryCampaignRepository
+
+    campaign = Campaign.from_keitaro(stub.gateway().get_campaign(CampaignId(CID)))
+    campaign.pin(StreamId(1332012), FLEXACIL.id, 50)
+    repo = InMemoryCampaignRepository()
+    uow = FakeUnitOfWork(repo)
+    repo.add(campaign)
+    uow.commit()
+    stub.on("GET", "/streams/1332012", OFFERS_STREAM)
+    stub.on("PUT", "/streams/1332012", OFFERS_STREAM)  # Keitaro оставил старые веса 60/40
+
+    with _pytest.raises(PushNotConfirmed):
+        push_stream(repo, stub.gateway(), uow, CampaignId(CID), StreamId(1332012), prefix="test_x_")
+    assert repo.get(CampaignId(CID)).has_draft  # type: ignore[union-attr]
+

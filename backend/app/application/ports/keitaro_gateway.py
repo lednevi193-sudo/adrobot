@@ -89,6 +89,9 @@ class KeitaroGateway(Protocol):
 
     def publish_offers(
         self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
-    ) -> None:
-        """Push: заменить раздачу потока в Keitaro этим списком офферов с весами (FR-2.13)."""
+    ) -> KeitaroStreamState:
+        """Push: заменить раздачу потока в Keitaro этим списком офферов с весами (FR-2.13).
+
+        Возвращает поток в том виде, в каком Keitaro его сохранил (ответ PUT), — по нему сверка.
+        """
         ...

@@ -88,13 +88,14 @@ class DemoKeitaro:
 
     def publish_offers(
         self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
-    ) -> None:
-        """Как HTTP ACL: сохранить выключенные, если Adrobot не включает их явно."""
+    ) -> KeitaroStreamState:
+        """Как HTTP ACL: сохранить выключенные, если Adrobot не включает их явно; вернуть сохранённый поток."""
         sent = {o.offer.id for o in offers}
         current = current if current is not None else self.get_stream(stream_id)
         refs = {o.id: o for o in OFFERS}
         kept = tuple(PublishedOffer(refs[o.offer_id], o.share) for o in current.inactive_offers if o.offer_id not in sent)
         self.edit_offers(stream_id, (*offers, *kept), {o.offer.id for o in kept})
+        return self.get_stream(stream_id)
 
     def edit_offers(
         self, stream_id: StreamId, offers: Sequence[PublishedOffer], disabled: set[OfferId],

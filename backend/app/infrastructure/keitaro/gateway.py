@@ -95,16 +95,7 @@ class HttpKeitaroGateway:
             if error.status == 404:
                 raise StreamNotInCampaign(stream_id) from error
             raise
-        stream = _parse(KeitaroStreamStateJson, raw)
-        if stream.state == from_keitaro.DELETED:
-            raise StreamNotInCampaign(stream_id)
-        if stream.id != stream_id:
-            raise KeitaroError("Keitaro вернул другой ID потока")
-        return KeitaroStreamState(
-            StreamId(stream.id), CampaignId(stream.campaign_id),
-            tuple(PublishedOffer(OfferRef(OfferId(o.offer_id), ""), o.share) for o in stream.offers if o.state == from_keitaro.ACTIVE),
-            tuple(InactiveStreamOffer(OfferId(o.offer_id), o.share, o.state) for o in stream.offers if o.state != from_keitaro.ACTIVE),
-        )
+        return _stream_state(stream_id, raw)
 
     def list_active_offers(self) -> list[OfferRef]:
         return [from_keitaro.offer_ref(o) for o in self._offers() if o.state == from_keitaro.ACTIVE]
@@ -129,15 +120,21 @@ class HttpKeitaroGateway:
 
     def publish_offers(
         self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
-    ) -> None:
+    ) -> KeitaroStreamState:
         """PUT заменяет offers[] целиком. Выключенные в Keitaro офферы обёртка не показывает
         и не трогает — их читаем прямо перед PUT и отправляем обратно как есть, иначе Push
-        молча удалил бы их из потока."""
+        молча удалил бы их из потока.
+
+        Ответ PUT — поток в том виде, в каком Keitaro его сохранил, а не эхо запроса. Проверено
+        на стенде 20.11.2026: два одинаковых оффера в запросе -> одна запись и в ответе PUT,
+        и в последующем GET. Поэтому сверка Push идёт по ответу PUT, без отдельного GET.
+        """
         current = current if current is not None else self.get_stream(stream_id)
         if current.id != stream_id:
             raise StreamNotInCampaign(stream_id)
         inactive = [KeitaroStreamOfferJson(offer_id=o.offer_id, share=o.share, state=o.state) for o in current.inactive_offers]
-        self._client.put(f"/streams/{stream_id}", to_keitaro.stream_offers_body(offers, inactive))
+        saved = self._client.put(f"/streams/{stream_id}", to_keitaro.stream_offers_body(offers, inactive))
+        return _stream_state(stream_id, saved)
 
     # ---------- внутреннее ----------
 
@@ -151,6 +148,20 @@ class HttpKeitaroGateway:
 
     def _offer_names(self) -> dict[int, str]:
         return {o.id: o.name for o in self._offers()}
+
+
+def _stream_state(stream_id: StreamId, raw: Json) -> KeitaroStreamState:
+    """Ответ GET или PUT /streams/{id} -> снимок одного потока: активные офферы и неактивные строки."""
+    stream = _parse(KeitaroStreamStateJson, raw)
+    if stream.state == from_keitaro.DELETED:
+        raise StreamNotInCampaign(stream_id)
+    if stream.id != stream_id:
+        raise KeitaroError("Keitaro вернул другой ID потока")
+    return KeitaroStreamState(
+        StreamId(stream.id), CampaignId(stream.campaign_id),
+        tuple(PublishedOffer(OfferRef(OfferId(o.offer_id), ""), o.share) for o in stream.offers if o.state == from_keitaro.ACTIVE),
+        tuple(InactiveStreamOffer(OfferId(o.offer_id), o.share, o.state) for o in stream.offers if o.state != from_keitaro.ACTIVE),
+    )
 
 
 def _parse(model: type[M], data: Json) -> M:
