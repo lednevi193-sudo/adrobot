@@ -265,15 +265,15 @@ def test_sync_refreshes_offer_name(three: Stream) -> None:
 # ---------- Bring back закреплённого оффера, удалённого без Push ----------
 
 
-def test_bring_back_of_unpublished_removal_keeps_pin(three: Stream) -> None:
+def test_bring_back_of_unpublished_removal_drops_pin(three: Stream) -> None:
     three.pin(A.id, 50)
     push(three)
     three.remove_offer(A.id)
 
     three.bring_back(A.id)
 
-    assert view(three)["A"] == (S.ACTIVE, 50, True)
-    assert not three.has_draft
+    assert view(three)["A"] == (S.ACTIVE, 34, False)
+    assert three.has_draft
 
 
 def test_bring_back_drops_pin_that_would_exceed_100(three: Stream) -> None:
@@ -286,6 +286,31 @@ def test_bring_back_drops_pin_that_would_exceed_100(three: Stream) -> None:
 
     assert view(three)["A"][2] is False  # 60 + 50 > 100 — вернулся незакреплённым
     assert sum(s for _, s, _ in view(three).values()) == 100
+
+
+def test_unpin_after_local_pin_edit_rebalances(three: Stream) -> None:
+    three.pin(A.id, 50)
+    push(three)
+    three.pin(A.id, 60)
+
+    three.unpin(A.id)
+
+    assert view(three) == {"A": (S.ACTIVE, 34, False), "B": (S.ACTIVE, 33, False), "C": (S.ACTIVE, 33, False)}
+
+
+def test_fetch_reorders_existing_offers_for_rounding(three: Stream) -> None:
+    three.sync_from_keitaro(snapshot((C, 33), (B, 33), (A, 34)))
+    three.pin(B.id, 33)
+
+    assert list(view(three).items()) == [("C", (S.ACTIVE, 34, False)), ("B", (S.ACTIVE, 33, True)), ("A", (S.ACTIVE, 33, False))]
+
+
+def test_repeated_fetch_preserves_archive_order(three: Stream) -> None:
+    current = snapshot((C, 50), (A, 50))
+    three.sync_from_keitaro(current)
+    first = [(a.offer.id, a.order) for a in three.assignments]
+    three.sync_from_keitaro(current)
+    assert [(a.offer.id, a.order) for a in three.assignments] == first
 
 
 # ---------- закреплённый вес против ручной правки в Keitaro (Q7, FR-2.9a, FR-2.15) ----------
@@ -330,9 +355,11 @@ def test_unpin_after_drift_accepts_keitaro_shares(three: Stream) -> None:
     stream.unpin(A.id)
 
     assert view(stream) == {"A": (S.ACTIVE, 20, False), "B": (S.ACTIVE, 40, False), "C": (S.ACTIVE, 40, False)}
-    assert [c.kind for c in stream.draft_changes()] == [DraftChangeKind.UNPIN, DraftChangeKind.SHARE, DraftChangeKind.SHARE]
-    assert push(stream) == [("A", 20), ("B", 40), ("C", 40)]  # в Keitaro ничего не меняется
+    # обёртка совпала с Keitaro — публиковать и отменять нечего, поток сразу не жёлтый
     assert not stream.has_draft
+    assert stream.draft_changes() == []
+    stream.cancel()
+    assert view(stream)["A"] == (S.ACTIVE, 20, False)  # Cancel не возвращает закрепление
 
 
 def test_unpin_after_drift_with_local_add_rebalances(three: Stream) -> None:
@@ -360,3 +387,35 @@ def test_draft_different_from_keitaro_is_not_adopted(three: Stream) -> None:
     three.pin(A.id, 50)
     assert not three.adopt_published(snapshot((A, 34), (B, 33), (C, 33)).offers)
     assert three.has_draft
+
+
+def test_offer_disabled_in_keitaro_does_not_block_push(three: Stream) -> None:
+    """Выключенный в Keitaro оффер выпадает из снимка вместе со своим весом: остальные
+    получают 34+33 = 67%. Сумма ≠ 100 не должна блокировать Push — веса пересчитываются."""
+    three.sync_from_keitaro(snapshot((A, 34), (B, 33)))  # C выключили в Keitaro
+
+    assert view(three) == {"A": (S.ACTIVE, 50, False), "B": (S.ACTIVE, 50, False), "C": (S.REMOVED, 0, False)}
+    assert three.has_draft  # в Keitaro у A и B другие веса — нужен Push
+    assert push(three) == [("A", 50), ("B", 50)]
+
+
+def test_keitaro_shares_summing_to_100_are_kept_as_is(three: Stream) -> None:
+    three.sync_from_keitaro(snapshot((A, 60), (B, 30), (C, 10)))
+    assert [s for _, s, _ in view(three).values()] == [60, 30, 10]
+    assert not three.has_draft
+
+
+def test_cancel_after_reenabled_offer_returns_to_normalized_shares() -> None:
+    """A закреплён на 100 и опубликован; в Keitaro включили B, выключенный со своими 50% -> сумма 150."""
+    stream = make_stream((A, 100))
+    stream.pin(A.id, 100)
+    push(stream)
+    stream.sync_from_keitaro(snapshot((A, 100), (B, 50)))
+    assert view(stream) == {"A": (S.ACTIVE, 100, True), "B": (S.ACTIVE, 0, False)}
+    assert stream.has_draft and stream.draft_changes() == []  # жёлтый: Keitaro не 100%, но отменять нечего
+
+    stream.unpin(A.id)  # принять из Keitaro нечего (150%) — равное деление
+    assert [s for _, s, _ in view(stream).values()] == [50, 50]
+
+    stream.cancel()
+    assert view(stream) == {"A": (S.ACTIVE, 100, True), "B": (S.ACTIVE, 0, False)}  # как после Fetch, не 100+50

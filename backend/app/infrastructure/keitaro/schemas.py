@@ -40,3 +40,14 @@ class KeitaroOfferJson(_KeitaroModel):
     id: int
     name: str
     state: str = "active"
+
+
+class KeitaroCampaignNameJson(_KeitaroModel):
+    name: str
+
+
+class KeitaroStreamStateJson(_KeitaroModel):
+    id: int
+    campaign_id: int
+    state: str = "active"
+    offers: list[KeitaroStreamOfferJson] = []

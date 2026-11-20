@@ -12,6 +12,15 @@ def test_same_as_keitaro_no_changes() -> None:
     assert changes_in_keitaro(Campaign.from_keitaro(snapshot), snapshot) == []
 
 
+def test_offer_reorder_is_detected_and_synced() -> None:
+    campaign = Campaign.from_keitaro(keitaro((OFFER, 50), (OTHER, 50)))
+    reordered = keitaro((OTHER, 50), (OFFER, 50))
+    assert any("порядок" in change for change in changes_in_keitaro(campaign, reordered))
+    campaign.sync_from_keitaro(reordered)
+    assert changes_in_keitaro(campaign, reordered) == []
+    assert [a.offer.id for a in sorted(campaign.stream(OFFERS).assignments, key=lambda a: a.order)] == [OTHER.id, OFFER.id]
+
+
 def test_draft_is_not_a_keitaro_change() -> None:
     snapshot = keitaro((OFFER, 100))
     campaign = Campaign.from_keitaro(snapshot)

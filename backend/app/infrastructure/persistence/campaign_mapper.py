@@ -7,6 +7,7 @@ from app.domain.campaigns import (
     DesiredState,
     OfferAssignment,
     PublishedState,
+    PushLease,
     Stream,
     StreamKind,
 )
@@ -16,6 +17,7 @@ from app.infrastructure.persistence.documents import (
     AssignmentDoc,
     DesiredDoc,
     PublishedDoc,
+    PushLeaseDoc,
     StreamDoc,
     StreamsDocument,
 )
@@ -34,7 +36,13 @@ def fill_record(record: CampaignRecord, campaign: Campaign) -> None:
 
 
 def _to_document(campaign: Campaign) -> dict[str, Any]:
-    doc = StreamsDocument(streams=[_stream_doc(s) for s in campaign.streams])
+    lease = campaign.push_in_progress
+    doc = StreamsDocument(
+        streams=[_stream_doc(s) for s in campaign.streams],
+        push_in_progress=None if lease is None else PushLeaseDoc(
+            stream_id=lease.stream_id, started_at=lease.started_at, token=lease.token,
+        ),
+    )
     return doc.model_dump(mode="json")
 
 
@@ -73,6 +81,9 @@ def to_domain(record: CampaignRecord) -> Campaign:
         domain_url=record.domain_url,
         streams=[_stream(s) for s in doc.streams],
         version=record.version,
+        push_in_progress=None if doc.push_in_progress is None else PushLease(
+            StreamId(doc.push_in_progress.stream_id), doc.push_in_progress.started_at, doc.push_in_progress.token,
+        ),
     )
 
 

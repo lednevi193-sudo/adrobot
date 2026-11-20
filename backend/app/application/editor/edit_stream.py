@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from app.application.editor.loading import load_campaign
+from app.application.editor.push_state import DEFAULT_LEASE_SECONDS, ensure_available
 from app.application.offers.search_offers import find_offer
 from app.application.ports import CampaignRepository, KeitaroGateway, UnitOfWork
 from app.domain.campaigns import Campaign, DraftChange
@@ -21,9 +22,12 @@ def edit_campaign(
     uow: UnitOfWork,
     campaign_id: CampaignId,
     command: Callable[[Campaign], T],
+    stream_id: StreamId,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> tuple[Campaign, T]:
     campaign = load_campaign(repo, campaign_id, expected_version)
+    ensure_available(campaign, stream_id, lease_seconds=lease_seconds)
     result = command(campaign)  # DomainError — до save: в БД ничего не меняется
     repo.save(campaign)
     uow.commit()
@@ -39,9 +43,14 @@ def add_offer(
     offer_id: OfferId,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Campaign:
+    checked = load_campaign(repo, campaign_id, expected_version)
+    ensure_available(checked, stream_id, lease_seconds=lease_seconds)
+    uow.rollback()  # поиск оффера может обратиться к Keitaro
     offer = find_offer(keitaro, offer_id)
-    campaign, _ = edit_campaign(repo, uow, campaign_id, lambda c: c.add_offer(stream_id, offer), expected_version)
+    expected_version = checked.version
+    campaign, _ = edit_campaign(repo, uow, campaign_id, lambda c: c.add_offer(stream_id, offer), stream_id, expected_version, lease_seconds)
     return campaign
 
 
@@ -53,8 +62,9 @@ def remove_offer(
     offer_id: OfferId,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Campaign:
-    return edit_campaign(repo, uow, campaign_id, lambda c: c.remove_offer(stream_id, offer_id), expected_version)[0]
+    return edit_campaign(repo, uow, campaign_id, lambda c: c.remove_offer(stream_id, offer_id), stream_id, expected_version, lease_seconds)[0]
 
 
 def bring_back(
@@ -65,8 +75,9 @@ def bring_back(
     offer_id: OfferId,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Campaign:
-    return edit_campaign(repo, uow, campaign_id, lambda c: c.bring_back(stream_id, offer_id), expected_version)[0]
+    return edit_campaign(repo, uow, campaign_id, lambda c: c.bring_back(stream_id, offer_id), stream_id, expected_version, lease_seconds)[0]
 
 
 def pin(
@@ -78,8 +89,9 @@ def pin(
     share: int | None = None,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Campaign:
-    return edit_campaign(repo, uow, campaign_id, lambda c: c.pin(stream_id, offer_id, share), expected_version)[0]
+    return edit_campaign(repo, uow, campaign_id, lambda c: c.pin(stream_id, offer_id, share), stream_id, expected_version, lease_seconds)[0]
 
 
 def unpin(
@@ -90,8 +102,9 @@ def unpin(
     offer_id: OfferId,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Campaign:
-    return edit_campaign(repo, uow, campaign_id, lambda c: c.unpin(stream_id, offer_id), expected_version)[0]
+    return edit_campaign(repo, uow, campaign_id, lambda c: c.unpin(stream_id, offer_id), stream_id, expected_version, lease_seconds)[0]
 
 
 def cancel_stream(
@@ -101,6 +114,7 @@ def cancel_stream(
     stream_id: StreamId,
     *,
     expected_version: int | None = None,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> tuple[Campaign, list[DraftChange]]:
     """Возвращает отменённое — для сообщения «отменено: …». Подтверждение до вызова — по draft_changes()."""
-    return edit_campaign(repo, uow, campaign_id, lambda c: c.cancel(stream_id), expected_version)
+    return edit_campaign(repo, uow, campaign_id, lambda c: c.cancel(stream_id), stream_id, expected_version, lease_seconds)

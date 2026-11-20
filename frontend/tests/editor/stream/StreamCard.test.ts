@@ -30,7 +30,9 @@ describe('StreamCard', () => {
   })
 
   it('жёлтый без черновика (закреплённый вес поменяли в Keitaro) — подсказка, Cancel заблокирован', () => {
-    const w = mountCard({ stream: stream({ has_draft: true, can_cancel: false }) })
+    const w = mountCard({
+      stream: stream({ has_draft: true, can_cancel: false, offers: [offer({ pinned: true, share: 70, keitaro_share: 50 })] }),
+    })
     expect(w.find('[data-test=draft-tag]').text()).toBe('не как в Keitaro')
     expect(w.find('[data-test=pin-drift]').text()).toContain('Unpin примет вес из Keitaro')
     expect(w.find('[data-test=cancel]').attributes('disabled')).toBeDefined()
@@ -89,5 +91,34 @@ describe('StreamCard', () => {
     const w = mountCard({ error })
     expect(w.find('[data-test=error-message]').text()).toBe('Keitaro опубликовал другое')
     expect(w.find('[data-test=error-details]').text()).toContain('отправили 50%')
+  })
+  it('оффер вернулся из архива и одновременно появилась подсказка — таблица офферов одна', async () => {
+    const w = mountCard({
+      stream: stream({
+        offers: [offer({ id: 1, pinned: true }), offer({ id: 2, status: 'removed', share: 0, keitaro_share: null })],
+      }),
+    })
+    await w.setProps({
+      stream: stream({
+        has_draft: true,
+        can_cancel: false,
+        offers: [offer({ id: 1, pinned: true, keitaro_share: 50 }), offer({ id: 2, share: 0, keitaro_share: 50 })],
+      }),
+    })
+    expect(w.findAll('table.offers thead')).toHaveLength(1)
+    expect(w.findAll('[data-test=offer-row]')).toHaveLength(2)
+    expect(w.find('[data-test=archive]').exists()).toBe(false)
+  })
+  it('жёлтый без черновика из-за суммы весов Keitaro ≠ 100 — своя подсказка, без обещаний про Unpin', () => {
+    const w = mountCard({
+      stream: stream({
+        has_draft: true,
+        can_cancel: false,
+        offers: [offer({ id: 1, pinned: true, share: 100, keitaro_share: 100 }), offer({ id: 2, share: 0, keitaro_share: 50 })],
+      }),
+    })
+    const hint = w.find('[data-test=pin-drift]').text()
+    expect(hint).toContain('не дают в сумме 100%')
+    expect(hint).not.toContain('Unpin')
   })
 })

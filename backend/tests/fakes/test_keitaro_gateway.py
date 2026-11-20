@@ -5,6 +5,8 @@ import pytest
 from app.application.errors import CampaignNotFound, KeitaroError
 from app.domain.campaigns import Campaign, CampaignBlueprint, PublishedOffer
 from app.domain.common.ids import CampaignId, OfferId
+from app.domain.common.ids import StreamId
+from app.domain.campaigns.errors import StreamNotInCampaign
 from app.domain.offers.offer_ref import OfferRef
 from tests.fakes.keitaro_gateway import FakeKeitaroGateway
 
@@ -36,6 +38,22 @@ def test_publish_replaces_stream_offers() -> None:
     fake.publish_offers(stream_id, [PublishedOffer(other, 100)])
 
     assert fake.get_campaign(cid).streams[1].offers == (PublishedOffer(other, 100),)
+
+
+def test_stream_and_name_reads_follow_port_contract() -> None:
+    fake = FakeKeitaroGateway()
+    cid = created(fake)
+    stream_id = fake.get_campaign(cid).streams[1].id
+    fake.calls.clear()
+    assert fake.get_campaign_name(cid) == 'test_x_promo'
+    stream = fake.get_stream(stream_id)
+    assert (stream.id, stream.campaign_id) == (stream_id, cid)
+    assert [(o.offer.id, o.share) for o in stream.offers] == [(18813, 100)]
+    assert fake.calls == ['get_campaign_name', 'get_stream']
+    with pytest.raises(StreamNotInCampaign):
+        fake.get_stream(StreamId(404))
+    with pytest.raises(CampaignNotFound):
+        fake.get_campaign_name(CampaignId(404))
 
 
 def test_fail_on_and_delete() -> None:

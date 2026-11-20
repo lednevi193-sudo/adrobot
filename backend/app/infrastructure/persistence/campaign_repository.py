@@ -24,7 +24,7 @@ class SqlCampaignRepository:
         self._session = session
 
     def get(self, campaign_id: CampaignId) -> Campaign | None:
-        record = self._session.get(CampaignRecord, campaign_id)
+        record = self._session.get(CampaignRecord, campaign_id, populate_existing=True)
         return None if record is None else to_domain(record)
 
     def list(self) -> Sequence[Campaign]:

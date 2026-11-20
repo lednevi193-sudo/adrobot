@@ -27,6 +27,12 @@ class PinRequest(BaseModel):
     share: int | None = Field(default=None, description="Не задан — закрепить текущий вес")
 
 
+class PushRequest(BaseModel):
+    overwrite_keitaro_changes: bool = Field(
+        default=False, description="Опубликовать поверх правок, сделанных в Keitaro после Fetch (их показал 409)"
+    )
+
+
 # ---------- ответы ----------
 
 
@@ -55,6 +61,11 @@ class StreamOfferView(BaseModel):
     share: int
     pinned: bool
     keitaro_share: int | None = Field(description="Вес в Keitaro; None — оффера в Keitaro нет (FR-2.9a)")
+
+
+class DraftResponse(BaseModel):
+    version: int
+    changes: list[DraftChangeDto]
 
 
 class StreamView(BaseModel):

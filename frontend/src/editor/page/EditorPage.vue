@@ -6,13 +6,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { NSpace, NSpin, useMessage } from 'naive-ui'
 import ErrorAlert from '@/shared/ui/ErrorAlert.vue'
-import type { DraftChangeDto } from '../api/types'
+import type { DraftResponse } from '../api/types'
 import ConfirmDiscardModal from '../draft/ConfirmDiscardModal.vue'
 import OtherStreamCard from '../stream/OtherStreamCard.vue'
 import StreamCard from '../stream/StreamCard.vue'
 import { useCampaignEditor } from '../useCampaignEditor'
 import CampaignHeader from './CampaignHeader.vue'
 import KeitaroChangesAlert from './KeitaroChangesAlert.vue'
+import PushOverwriteModal from './PushOverwriteModal.vue'
 
 const props = defineProps<{ id: number }>()
 const editor = useCampaignEditor(props.id)
@@ -28,35 +29,45 @@ const streamNames = computed(() =>
 )
 
 // ---- Fetch streams (FR-2.2, FR-2.3a) ----
-const fetchConfirm = ref<DraftChangeDto[] | null>(null)
+const fetchConfirm = ref<DraftResponse | null>(null)
 async function onFetch() {
   const outcome = await editor.fetchStreams()
-  if (outcome.kind === 'needs_confirmation') fetchConfirm.value = outcome.changes
+  if (outcome.kind === 'needs_confirmation') fetchConfirm.value = { changes: outcome.changes, version: outcome.version }
   else if (outcome.kind === 'done') message.success('Потоки синхронизированы с Keitaro')
 }
 async function confirmFetch() {
-  const outcome = await editor.fetchStreams(true)
+  if (!fetchConfirm.value) return
+  const outcome = await editor.fetchStreams(true, fetchConfirm.value.version)
   fetchConfirm.value = null
   if (outcome.kind === 'done') message.success('Черновики отброшены, потоки синхронизированы с Keitaro')
 }
 
 // ---- Cancel (FR-2.10, FR-2.10a) ----
-const cancelConfirm = ref<{ streamId: number; changes: DraftChangeDto[] } | null>(null)
+const cancelConfirm = ref<(DraftResponse & { streamId: number }) | null>(null)
 async function onCancel(streamId: number) {
-  const changes = await cmd.draft(streamId)
-  if (changes) cancelConfirm.value = { streamId, changes }
+  const snapshot = await cmd.draft(streamId)
+  if (snapshot) cancelConfirm.value = { streamId, ...snapshot }
 }
 async function confirmCancel() {
   if (!cancelConfirm.value) return
-  const ok = await cmd.cancel(cancelConfirm.value.streamId)
+  const ok = await cmd.cancel(cancelConfirm.value.streamId, cancelConfirm.value.version)
   cancelConfirm.value = null
   if (ok) message.success('Черновик потока отменён')
 }
 
 // ---- Push (FR-2.13, FR-2.14) ----
-async function onPush(streamId: number) {
-  if (await cmd.push(streamId)) message.success('Опубликовано в Keitaro')
+const pushConfirm = ref<{ streamId: number; differences: string[] } | null>(null)
+async function onPush(streamId: number, overwrite = false) {
+  const outcome = await cmd.push(streamId, overwrite)
+  pushConfirm.value = outcome.kind === 'needs_confirmation' ? { streamId, differences: outcome.differences } : null
+  if (outcome.kind === 'done') message.success('Опубликовано в Keitaro')
 }
+const showPushConfirm = computed({
+  get: () => pushConfirm.value !== null,
+  set: (v: boolean) => {
+    if (!v) pushConfirm.value = null
+  },
+})
 
 const modalShow = (target: typeof fetchConfirm | typeof cancelConfirm) =>
   computed({
@@ -104,10 +115,16 @@ const showCancelConfirm = modalShow(cancelConfirm)
     title="Fetch streams отбросит черновики"
     lead="В кампании есть неопубликованные изменения. Перед синхронизацией с Keitaro будет отменено:"
     confirm-text="Отбросить и синхронизировать"
-    :changes="fetchConfirm ?? []"
+    :changes="fetchConfirm?.changes ?? []"
     :stream-names="streamNames"
     :loading="busy === 'fetch'"
     @confirm="confirmFetch"
+  />
+  <PushOverwriteModal
+    v-model:show="showPushConfirm"
+    :differences="pushConfirm?.differences ?? []"
+    :loading="busy?.startsWith('push:')"
+    @confirm="pushConfirm && onPush(pushConfirm.streamId, true)"
   />
   <ConfirmDiscardModal
     v-model:show="showCancelConfirm"

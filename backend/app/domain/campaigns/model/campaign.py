@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from app.domain.campaigns.model.draft import DraftChange
 from app.domain.campaigns.sync.snapshots import KeitaroCampaign, PublishedOffer
 from app.domain.campaigns.model.stream import Stream
+from app.domain.campaigns.model.push import PushLease
 from app.domain.campaigns.errors import CampaignHasDrafts, StreamNotInCampaign
 from app.domain.common.ids import CampaignId, OfferId, StreamId
 from app.domain.offers.offer_ref import OfferRef
@@ -31,6 +32,7 @@ class Campaign:
     domain_url: str | None
     streams: list[Stream] = field(default_factory=list)
     version: int = 0  # оптимистическая блокировка, ведёт репозиторий
+    push_in_progress: PushLease | None = None
 
     @classmethod
     def from_keitaro(cls, snapshot: KeitaroCampaign) -> "Campaign":

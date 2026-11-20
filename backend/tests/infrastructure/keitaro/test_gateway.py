@@ -1,9 +1,11 @@
 """ACL: JSON Keitaro (форма — как на стенде 20.11.2026) <-> снимки и спецификации домена."""
 
 import pytest
+import httpx
 
 from app.application.errors import CampaignNotFound, KeitaroError
-from app.domain.campaigns import CampaignBlueprint, PublishedOffer
+from app.domain.campaigns import Campaign, CampaignBlueprint, PublishedOffer
+from app.domain.campaigns.errors import StreamNotInCampaign
 from app.domain.common.ids import CampaignId, OfferId, StreamId
 from app.domain.offers.offer_ref import OfferRef
 from tests.infrastructure.keitaro.stub import KeitaroStub
@@ -80,6 +82,113 @@ def test_unexpected_payload_is_reported_not_crashing(stub: KeitaroStub) -> None:
 
 def test_list_active_offers_hides_inactive(stub: KeitaroStub) -> None:
     assert stub.gateway().list_active_offers() == [FLEXACIL]
+
+
+def test_offers_cache_is_shared_and_expires_without_sleep(stub: KeitaroStub) -> None:
+    now = [100.0]
+    gateway = stub.gateway(clock=lambda: now[0], offers_ttl=60)
+    gateway.get_campaign(CampaignId(CID))
+    gateway.get_campaign(CampaignId(CID))
+    gateway.list_active_offers()
+    assert sum(r.url.path.endswith('/offers') for r in stub.requests) == 1
+    stub.on('GET', '/offers', [{**OFFERS[0], 'name': 'New name'}])
+    now[0] = 159.99
+    assert gateway.list_active_offers()[0].name == FLEXACIL.name
+    now[0] = 160
+    assert gateway.list_active_offers()[0].name == 'New name'
+    assert sum(r.url.path.endswith('/offers') for r in stub.requests) == 2
+
+
+def test_offer_load_failure_is_not_cached(stub: KeitaroStub) -> None:
+    gateway = stub.gateway()
+    stub.on('GET', '/offers', {'error': 'temporary'}, status=500)
+    with pytest.raises(KeitaroError):
+        gateway.list_active_offers()
+    stub.on('GET', '/offers', OFFERS)
+    assert gateway.get_campaign(CampaignId(CID)).streams[1].offers[0].offer == FLEXACIL
+    assert gateway.list_active_offers() == [FLEXACIL]
+    assert sum(r.url.path.endswith('/offers') for r in stub.requests) == 2
+
+
+def test_concurrent_offer_reads_use_one_load(stub: KeitaroStub) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event
+
+    gate, entered, release = Barrier(9), Event(), Event()
+    def load(request):
+        entered.set()
+        assert release.wait(5)
+        return httpx.Response(200, json=OFFERS)
+    stub.routes[('GET', '/admin_api/v1/offers')] = load
+    gateway = stub.gateway()
+    def read():
+        gate.wait(timeout=5)
+        return gateway.list_active_offers()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(read) for _ in range(8)]
+        gate.wait(timeout=5)
+        try:
+            assert entered.wait(5)
+        finally:
+            release.set()
+        assert all(f.result(timeout=5) == [FLEXACIL] for f in futures)
+    assert sum(r.url.path.endswith('/offers') for r in stub.requests) == 1
+
+
+def test_get_campaign_name_is_one_request_without_streams_or_offers(stub: KeitaroStub) -> None:
+    assert stub.gateway().get_campaign_name(CampaignId(CID)) == CAMPAIGN['name']
+    assert [(r.method, r.url.path) for r in stub.requests] == [('GET', f'/admin_api/v1/campaigns/{CID}')]
+    with pytest.raises(CampaignNotFound):
+        stub.gateway().get_campaign_name(CampaignId(404))
+
+
+def test_get_stream_reads_ids_and_shares_without_offer_dictionary(stub: KeitaroStub) -> None:
+    stub.on('GET', '/streams/1332012', OFFERS_STREAM)
+    stream = stub.gateway().get_stream(StreamId(1332012))
+    assert (stream.id, stream.campaign_id) == (1332012, CID)
+    assert [(o.offer.id, o.offer.name, o.share) for o in stream.offers] == [(18813, '', 60), (25327, '', 40)]
+    assert [(o.offer_id, o.share, o.state) for o in stream.inactive_offers] == [(17210, 0, 'disabled')]
+    assert [r.url.path for r in stub.requests] == ['/admin_api/v1/streams/1332012']
+
+
+def test_missing_or_deleted_stream_is_not_in_campaign(stub: KeitaroStub) -> None:
+    with pytest.raises(StreamNotInCampaign):
+        stub.gateway().get_stream(StreamId(404))
+    stub.on('GET', '/streams/1332012', {**OFFERS_STREAM, 'state': 'deleted'})
+    with pytest.raises(StreamNotInCampaign):
+        stub.gateway().get_stream(StreamId(1332012))
+
+
+def test_full_push_makes_four_requests_and_ignores_put_response(stub: KeitaroStub) -> None:
+    import json
+    from app.application.editor.push_stream import push_stream
+    from tests.fakes.campaign_repository import FakeUnitOfWork, InMemoryCampaignRepository
+
+    campaign = Campaign.from_keitaro(stub.gateway().get_campaign(CampaignId(CID)))
+    gateway = stub.gateway()  # холодный кеш: лишний /offers не сможет скрыться за TTL
+    campaign.pin(StreamId(1332012), FLEXACIL.id, 50)
+    repo = InMemoryCampaignRepository()
+    uow = FakeUnitOfWork(repo)
+    repo.add(campaign)
+    uow.commit()
+    state = dict(OFFERS_STREAM)
+    def get_stream(request):
+        return httpx.Response(200, json=state)
+    def put_stream(request):
+        state['offers'] = json.loads(request.content)['offers']
+        return httpx.Response(200, json=OFFERS_STREAM)  # старое тело намеренно отличается от GET
+    stub.routes[('GET', '/admin_api/v1/streams/1332012')] = get_stream
+    stub.routes[('PUT', '/admin_api/v1/streams/1332012')] = put_stream
+    stub.requests.clear()
+
+    saved = push_stream(repo, gateway, uow, CampaignId(CID), StreamId(1332012), prefix='test_x_')
+
+    assert not saved.has_draft and saved.push_in_progress is None
+    assert [(r.method, r.url.path) for r in stub.requests] == [
+        ('GET', f'/admin_api/v1/campaigns/{CID}'), ('GET', '/admin_api/v1/streams/1332012'),
+        ('PUT', '/admin_api/v1/streams/1332012'), ('GET', '/admin_api/v1/streams/1332012'),
+    ]
+    assert state['offers'][-1] == {'offer_id': 17210, 'share': 0, 'state': 'disabled'}
 
 
 def test_list_campaigns() -> None:

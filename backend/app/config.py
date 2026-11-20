@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/config.py -> app -> backend -> корень репозитория
@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     keitaro_url: str
     keitaro_api_key: str = Field(repr=False)  # не попадёт в repr/логи
     keitaro_user_agent: str = "keitaro-wrapper/0.1"
-    keitaro_timeout: float = 20.0
+    keitaro_timeout: float = Field(default=20.0, gt=0)
+    keitaro_offers_ttl: float = Field(default=60.0, ge=0)
+    push_lease_minutes: float = Field(default=5.0, gt=0)
 
     database_url: str = Field(repr=False)  # содержит пароль
 
@@ -26,6 +28,12 @@ class Settings(BaseSettings):
     keitaro_domain_id: int = 1813
     keitaro_group_id: int = 10332
     keitaro_traffic_source_id: int = 836
+
+    @model_validator(mode="after")
+    def _push_window(self) -> "Settings":
+        if self.push_lease_minutes * 60 <= 4 * self.keitaro_timeout:
+            raise ValueError("PUSH_LEASE_MINUTES должен покрывать более четырёх KEITARO_TIMEOUT")
+        return self
 
     @field_validator("campaign_prefix")
     @classmethod

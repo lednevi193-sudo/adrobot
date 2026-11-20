@@ -40,6 +40,9 @@ def _stream_changes(stream: Stream, ks: KeitaroStream) -> list[str]:
     published = {a.offer.id: (a.offer, a.published.share) for a in stream.assignments if a.is_published and a.published}
     in_keitaro = {o.offer.id: (o.offer, o.share) for o in ks.offers}
     where = f"поток «{ks.name}»"
+    published_order = [a.offer.id for a in sorted(stream.assignments, key=lambda a: a.order) if a.is_published]
+    if published.keys() == in_keitaro.keys() and published_order != [o.offer.id for o in ks.offers]:
+        changes.append(f"{where}: изменился порядок офферов")
     for offer_id in sorted(published.keys() | in_keitaro.keys()):
         was, now = published.get(offer_id), in_keitaro.get(offer_id)
         if was is None and now is not None:

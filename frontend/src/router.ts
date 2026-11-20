@@ -3,8 +3,10 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import CreatorPage from './creator/CreatorPage.vue'
 import CampaignListPage from './editor/list/CampaignListPage.vue'
 import EditorPage from './editor/page/EditorPage.vue'
+import DemoKeitaroPage from './demo/DemoKeitaroPage.vue'
 
 export const routes: RouteRecordRaw[] = [
+  { path: '/demo/keitaro', name: 'demo-keitaro', component: DemoKeitaroPage },
   { path: '/', redirect: '/campaigns' },
   { path: '/create', name: 'creator', component: CreatorPage },
   { path: '/campaigns', name: 'campaigns', component: CampaignListPage },

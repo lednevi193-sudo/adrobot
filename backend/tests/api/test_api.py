@@ -82,7 +82,8 @@ def test_editor_flow_add_pin_push(client: TestClient, world: World, created: dic
     assert [o["share"] for o in c["streams"][1]["offers"]] == [70, 30]
 
     draft = client.get(url(created, "/draft")).json()
-    assert {d["kind"] for d in draft} == {"pin", "add"}
+    assert {d["kind"] for d in draft["changes"]} == {"pin", "add"}
+    assert draft["version"] == c["version"]
 
     c = client.post(url(created, "/push")).json()
     assert not c["has_draft"]
@@ -128,6 +129,7 @@ def test_fetch_with_draft_is_409_with_changes(client: TestClient, world: World, 
     assert r.status_code == 409
     body = r.json()
     assert body["code"] == "campaign_has_drafts"
+    assert body["version"] == world.repo.get(created["id"]).version
     assert {(d["offer"]["id"], d["kind"]) for d in body["changes"]} == {(FLEXACIL.id, "share"), (OTHER.id, "add")}
 
     r = client.post(f"/api/campaigns/{created['id']}/fetch", json={"discard_drafts": True})
@@ -152,7 +154,7 @@ def test_push_not_confirmed_is_502_with_differences(
     client: TestClient, world: World, created: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client.post(url(created, "/offers"), json={"offer_id": OTHER.id})
-    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers: None)
+    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: None)
 
     r = client.post(url(created, "/push"))
     assert r.status_code == 502
@@ -177,6 +179,22 @@ def test_keitaro_down_is_504(client: TestClient, world: World, monkeypatch: pyte
 
 
 # ---------- If-Match: версия кампании ----------
+
+
+def test_live_push_returns_clear_409_for_commands(client: TestClient, world: World, created: dict) -> None:
+    from datetime import UTC, datetime
+    from app.domain.campaigns import PushLease
+    from app.domain.common.ids import CampaignId, StreamId
+    campaign = world.repo.get(CampaignId(created['id']))
+    campaign.push_in_progress = PushLease(StreamId(created['streams'][1]['id']), datetime.now(UTC), 'robot-push')
+    world.repo.save(campaign)
+    world.uow.commit()
+    response = client.put(url(created, f'/offers/{FLEXACIL.id}/pin'), json={'share': 100})
+    assert response.status_code == 409
+    assert response.json()['code'] == 'push_in_progress'
+    assert 'уже выполняется' in response.json()['message']
+    assert client.post(url(created, '/push')).status_code == 409
+    assert client.post(f"/api/campaigns/{created['id']}/fetch").status_code == 409
 
 
 def test_view_carries_version_and_stale_if_match_is_409(client: TestClient, created: dict) -> None:
@@ -208,3 +226,17 @@ def test_can_cancel_tells_draft_from_pin_drift(client: TestClient, world: World,
 def test_malformed_if_match_is_400(client: TestClient, created: dict) -> None:
     r = client.post(url(created, "/cancel"), headers={"If-Match": "abc"})
     assert r.status_code == 400
+
+
+def test_push_after_change_in_keitaro_is_409_with_differences(client: TestClient, world: World, created: dict) -> None:
+    client.post(url(created, "/offers"), json={"offer_id": OTHER.id})
+    world.keitaro.edit_stream(created["streams"][1]["id"], [PublishedOffer(FLEXACIL, 70), PublishedOffer(OTHER, 30)])
+
+    r = client.post(url(created, "/push"))
+
+    assert r.status_code == 409
+    assert r.json()["code"] == "stream_changed_in_keitaro"
+    assert len(r.json()["differences"]) == 2
+    r = client.post(url(created, "/push"), json={"overwrite_keitaro_changes": True})
+    assert r.status_code == 200, r.text
+

@@ -10,6 +10,7 @@
 
 from dataclasses import dataclass, field
 
+from app.application.editor.push_state import DEFAULT_LEASE_SECONDS, utc_now
 from app.application.errors import CampaignAlreadyExists, CampaignNotFound
 from app.application.ports import CampaignRepository, KeitaroGateway, UnitOfWork
 from app.domain.campaigns import Campaign, changes_in_keitaro
@@ -23,11 +24,16 @@ class OpenedCampaign:
 
 
 def open_campaign(
-    repo: CampaignRepository, keitaro: KeitaroGateway, uow: UnitOfWork, campaign_id: CampaignId
+    repo: CampaignRepository, keitaro: KeitaroGateway, uow: UnitOfWork, campaign_id: CampaignId,
+    *, lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> OpenedCampaign:
     campaign = repo.get(campaign_id)
+    uow.rollback()  # чтение завершено до любых вызовов Keitaro
     if campaign is None:
         return OpenedCampaign(_import(repo, keitaro, uow, campaign_id))
+
+    if campaign.push_in_progress and campaign.push_in_progress.is_live(utc_now(), lease_seconds):
+        return OpenedCampaign(campaign)
 
     try:
         snapshot = keitaro.get_campaign(campaign_id)
@@ -41,6 +47,7 @@ def open_campaign(
     if campaign.draft_changes():  # не has_draft: расхождение закреплённого веса черновиком не считается
         return OpenedCampaign(campaign, changes)
 
+    campaign.push_in_progress = None
     campaign.sync_from_keitaro(snapshot)
     repo.save(campaign)
     uow.commit()

@@ -36,6 +36,10 @@ function add() {
 
 /** Поток жёлтый, но отменять нечего: разошёлся только закреплённый вес (FR-2.9a). */
 const pinDrift = computed(() => props.stream.has_draft && !props.stream.can_cancel)
+/** Причина — именно закреплённый вес, поменянный в Keitaro (FR-2.9a), а не сумма весов Keitaro ≠ 100. */
+const pinnedMismatch = computed(() =>
+  current.value.some((o) => o.pinned && o.keitaro_share !== null && o.keitaro_share !== o.share),
+)
 
 const is = (action: string) => props.busy === `${action}:${props.stream.id}`
 </script>
@@ -77,13 +81,21 @@ const is = (action: string) => props.busy === `${action}:${props.stream.id}`
       </n-space>
     </template>
 
-    <n-space vertical>
+    <!-- Не n-space: он оборачивает каждого потомка, и при одновременной смене нескольких v-if
+         (подсказка появилась, архив исчез) таблица офферов задваивалась. -->
+    <div class="body">
       <n-alert v-if="stream.push_blocker" type="warning" :show-icon="true" data-test="push-blocker">
         {{ stream.push_blocker }}
       </n-alert>
       <n-alert v-if="pinDrift" type="info" :show-icon="true" data-test="pin-drift">
-        Закреплённый вес отличается от веса в Keitaro — его поменяли в админке Keitaro.
-        Push вернёт в Keitaro закреплённый вес, Unpin примет вес из Keitaro.
+        <template v-if="pinnedMismatch">
+          Закреплённый вес отличается от веса в Keitaro — его поменяли в админке Keitaro.
+          Push вернёт в Keitaro закреплённый вес, Unpin примет вес из Keitaro.
+        </template>
+        <template v-else>
+          Веса в Keitaro не дают в сумме 100% (например, там включили оффер, выключенный со своим весом), поэтому
+          обёртка их пересчитала. Отменять нечего — Push опубликует веса обёртки.
+        </template>
       </n-alert>
       <ErrorAlert v-if="error" :error="error" @close="emit('clearError')" />
 
@@ -137,11 +149,16 @@ const is = (action: string) => props.busy === `${action}:${props.stream.id}`
           Add offer
         </n-button>
       </div>
-    </n-space>
+    </div>
   </n-card>
 </template>
 
 <style scoped>
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .draft {
   background: #fff8db;
   border-color: #f0c000;

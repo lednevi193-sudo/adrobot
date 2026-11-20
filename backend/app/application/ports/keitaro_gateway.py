@@ -15,7 +15,7 @@ from app.domain.campaigns import (
     OffersStreamSpec,
     PublishedOffer,
 )
-from app.domain.common.ids import CampaignId, StreamId
+from app.domain.common.ids import CampaignId, OfferId, StreamId
 from app.domain.offers.offer_ref import OfferRef
 
 
@@ -25,6 +25,21 @@ class CampaignSummary:
 
     id: CampaignId
     name: str
+
+
+@dataclass(frozen=True, slots=True)
+class InactiveStreamOffer:
+    offer_id: OfferId
+    share: int
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class KeitaroStreamState:
+    id: StreamId
+    campaign_id: CampaignId
+    offers: tuple[PublishedOffer, ...]
+    inactive_offers: tuple[InactiveStreamOffer, ...] = ()
 
 
 class KeitaroGateway(Protocol):
@@ -38,6 +53,14 @@ class KeitaroGateway(Protocol):
 
     def get_campaign(self, campaign_id: CampaignId) -> KeitaroCampaign:
         """Кампания с потоками и офферами в них. CampaignNotFound, если в Keitaro её нет."""
+        ...
+
+    def get_campaign_name(self, campaign_id: CampaignId) -> str:
+        """Только имя кампании; CampaignNotFound при 404."""
+        ...
+
+    def get_stream(self, stream_id: StreamId) -> KeitaroStreamState:
+        """Один поток без справочника имён; StreamNotInCampaign при 404."""
         ...
 
     def list_active_offers(self) -> Sequence[OfferRef]:
@@ -64,6 +87,8 @@ class KeitaroGateway(Protocol):
 
     # ---------- редактор ----------
 
-    def publish_offers(self, stream_id: StreamId, offers: Sequence[PublishedOffer]) -> None:
+    def publish_offers(
+        self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
+    ) -> None:
         """Push: заменить раздачу потока в Keitaro этим списком офферов с весами (FR-2.13)."""
         ...

@@ -15,6 +15,7 @@ from app.application.errors import (
     NotOurCampaign,
     OfferNotFound,
     PushNotConfirmed,
+    StreamChangedInKeitaro,
 )
 from app.domain.campaigns import AssignmentStatus, Campaign, PublishedOffer
 from app.domain.campaigns.errors import CampaignHasDrafts, EmptyStreamPush, InvalidShare
@@ -236,9 +237,195 @@ def test_push_failure_keeps_draft(world: World, ours: Campaign) -> None:
     assert world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
 
 
+def test_failed_push_releases_marker_without_losing_draft(world: World, ours: Campaign) -> None:
+    before = add_other(world, ours)
+    world.keitaro.fail_on = {'publish_offers'}
+    with pytest.raises(KeitaroError):
+        push(world, ours)
+    after = world.repo.get(ours.id)
+    assert after.push_in_progress is None
+    assert after.streams == before.streams
+
+
+def test_failed_cleanup_is_recoverable_after_lease_expiry(world: World, ours: Campaign, monkeypatch) -> None:
+    from datetime import timedelta
+    from app.application.errors import PushInProgress
+    add_other(world, ours)
+    real_commit = world.uow.commit
+    count = 0
+    def down_after_claim():
+        nonlocal count
+        count += 1
+        if count >= 2:
+            raise RuntimeError('database unavailable')
+        real_commit()
+    with monkeypatch.context() as patch:
+        patch.setattr(world.uow, 'commit', down_after_claim)
+        with pytest.raises(RuntimeError):
+            push(world, ours)
+    marker = world.repo.get(ours.id).push_in_progress
+    assert marker is not None
+    with pytest.raises(PushInProgress):
+        fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    monkeypatch.setattr('app.application.editor.push_state.utc_now', lambda: marker.started_at + timedelta(minutes=6))
+    recovered = fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    assert recovered.push_in_progress is None and not recovered.has_draft
+
+
+def test_push_preserves_parallel_edits_of_another_stream(world: World, ours: Campaign, monkeypatch) -> None:
+    from app.domain.campaigns import KeitaroStream
+    sid = StreamId(9999)
+    world.keitaro._add_stream(ours.id, KeitaroStream(sid, 'Another offers stream', 3, (PublishedOffer(FLEXACIL, 100),)))
+    fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    add_other(world, ours)
+    publish = world.keitaro.publish_offers
+    def edit_during_publish(stream_id, offers, *, current=None):
+        edit_stream.pin(world.repo, world.uow, ours.id, sid, FLEXACIL.id, 100)
+        publish(stream_id, offers, current=current)
+    monkeypatch.setattr(world.keitaro, 'publish_offers', edit_during_publish)
+    result = push(world, ours)
+    assert result.push_in_progress is None
+    assert not result.stream(offers_stream(ours)).has_draft
+    assert result.stream(sid).assignments[0].desired.pinned
+
+
+def test_failed_old_push_does_not_clear_another_owners_marker(world: World, ours: Campaign, monkeypatch) -> None:
+    from datetime import UTC, datetime
+    from app.domain.campaigns import PushLease
+    add_other(world, ours)
+    publish = world.keitaro.publish_offers
+    def replace_owner(stream_id, offers, *, current=None):
+        publish(stream_id, offers, current=current)
+        campaign = world.repo.get(ours.id)
+        campaign.push_in_progress = PushLease(stream_id, datetime.now(UTC), 'another-owner')
+        world.repo.save(campaign)
+        world.uow.commit()
+    monkeypatch.setattr(world.keitaro, 'publish_offers', replace_owner)
+    with pytest.raises(ConcurrencyConflict):
+        push(world, ours)
+    assert world.repo.get(ours.id).push_in_progress.token == 'another-owner'
+
+
+def test_delayed_old_push_cannot_put_after_expiry_and_takeover(world: World, ours: Campaign, monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+    now = [datetime.now(UTC)]
+    monkeypatch.setattr('app.application.editor.push_state.utc_now', lambda: now[0])
+    add_other(world, ours)
+    get_stream = world.keitaro.get_stream
+    delayed = False
+    def delayed_read(sid):
+        nonlocal delayed
+        snapshot = get_stream(sid)
+        if not delayed:
+            delayed = True
+            now[0] += timedelta(minutes=6)
+            pin_other(world, ours, 80)
+            push_stream(world.repo, world.keitaro, world.uow, ours.id, sid, prefix=PREFIX, clock=lambda: now[0])
+        return snapshot
+    monkeypatch.setattr(world.keitaro, 'get_stream', delayed_read)
+    with pytest.raises(ConcurrencyConflict):
+        push_stream(world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours), prefix=PREFIX, clock=lambda: now[0])
+    assert world.keitaro.calls.count('publish_offers') == 1
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 20, OTHER.id: 80}
+    saved = world.repo.get(ours.id)
+    assert not saved.has_draft and saved.push_in_progress is None
+
+
+def test_push_requires_time_reserve_before_put(world: World, ours: Campaign, monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+    now = [datetime.now(UTC)]
+    add_other(world, ours)
+    get_stream = world.keitaro.get_stream
+    def slow_read(sid):
+        now[0] += timedelta(seconds=250)  # TTL 300, оставшихся 50 с меньше резерва 80
+        return get_stream(sid)
+    monkeypatch.setattr(world.keitaro, 'get_stream', slow_read)
+    with pytest.raises(ConcurrencyConflict):
+        push_stream(world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours), prefix=PREFIX, clock=lambda: now[0])
+    assert 'publish_offers' not in world.keitaro.calls
+    assert world.repo.get(ours.id).push_in_progress is None
+    assert world.repo.get(ours.id).has_draft
+
+
+def test_only_one_push_claim_wins_for_same_version(world: World, ours: Campaign, monkeypatch) -> None:
+    seen = add_other(world, ours).version
+    save = world.repo.save
+    competing = False
+    def race(campaign):
+        nonlocal competing
+        if not competing:
+            competing = True
+            push_stream(world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours),
+                        prefix=PREFIX, expected_version=seen)
+        save(campaign)
+    monkeypatch.setattr(world.repo, 'save', race)
+    with pytest.raises(ConcurrencyConflict):
+        push_stream(world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours),
+                    prefix=PREFIX, expected_version=seen)
+    assert world.keitaro.calls.count('publish_offers') == 1
+    assert not world.repo.get(ours.id).has_draft
+    assert world.repo.get(ours.id).push_in_progress is None
+
+
+def test_live_push_blocks_commands_and_fetch_but_not_open(world: World, ours: Campaign) -> None:
+    from datetime import UTC, datetime
+    from app.application.errors import PushInProgress
+    from app.domain.campaigns import PushLease
+    campaign = add_other(world, ours)
+    campaign.push_in_progress = PushLease(offers_stream(ours), datetime.now(UTC), 'live')
+    world.repo.save(campaign)
+    world.uow.commit()
+    world.keitaro.calls.clear()
+    with pytest.raises(PushInProgress):
+        push(world, ours)
+    with pytest.raises(PushInProgress):
+        edit_stream.pin(world.repo, world.uow, ours.id, offers_stream(ours), OTHER.id, 80)
+    with pytest.raises(PushInProgress):
+        edit_stream.add_offer(world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours), OTHER.id)
+    with pytest.raises(PushInProgress):
+        fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    assert open_campaign(world.repo, world.keitaro, world.uow, ours.id).campaign.push_in_progress.token == 'live'
+    assert world.keitaro.calls == []
+
+
+def test_expired_push_marker_allows_push_and_fetch_recovery(world: World, ours: Campaign) -> None:
+    from datetime import UTC, datetime, timedelta
+    from app.domain.campaigns import PushLease
+    campaign = add_other(world, ours)
+    old = datetime.now(UTC) - timedelta(minutes=6)
+    campaign.push_in_progress = PushLease(offers_stream(ours), old, 'dead')
+    world.repo.save(campaign)
+    world.uow.commit()
+    assert push(world, ours).push_in_progress is None
+    changed = pin_other(world, ours, 80)
+    changed.push_in_progress = PushLease(offers_stream(ours), old, 'dead-after-put')
+    world.repo.save(changed)
+    world.uow.commit()
+    world.keitaro.edit_stream(offers_stream(ours), changed.offers_to_publish(offers_stream(ours)))
+    recovered = fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    assert recovered.push_in_progress is None and not recovered.has_draft
+    assert next(a for a in recovered.stream(offers_stream(ours)).assignments if a.offer.id == OTHER.id).desired.pinned
+
+
+def test_push_rejects_stream_now_owned_by_another_campaign(world: World, ours: Campaign) -> None:
+    from dataclasses import replace
+    from app.domain.campaigns.errors import StreamNotInCampaign
+    add_other(world, ours)
+    original = world.keitaro.campaigns[ours.id]
+    moved = original.streams[1]
+    foreign = world.keitaro.create_campaign('other_campaign')
+    world.keitaro.campaigns[foreign] = replace(world.keitaro.campaigns[foreign], streams=(moved,))
+    world.keitaro.campaigns[ours.id] = replace(original, streams=(original.streams[0],))
+    world.keitaro.calls.clear()
+    with pytest.raises(StreamNotInCampaign):
+        push(world, ours)
+    assert 'publish_offers' not in world.keitaro.calls
+    assert world.repo.get(ours.id).push_in_progress is None
+
+
 def test_push_not_confirmed_keeps_draft(world: World, ours: Campaign, monkeypatch: pytest.MonkeyPatch) -> None:
     add_other(world, ours)
-    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers: None)  # Keitaro «промолчал»
+    monkeypatch.setattr(world.keitaro, "publish_offers", lambda stream_id, offers, current=None: None)  # Keitaro «промолчал»
 
     with pytest.raises(PushNotConfirmed) as exc:
         push(world, ours)
@@ -273,8 +460,15 @@ def test_commit_failure_after_push_is_healed_by_fetch(
     add_other(world, ours)
     pin_other(world, ours, 70)
 
+    real_commit = world.uow.commit
+    commit_attempts = 0
+
     def broken_commit() -> None:
-        raise RuntimeError("БД недоступна")
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts == 2:
+            raise RuntimeError("БД недоступна")
+        real_commit()
 
     with monkeypatch.context() as m:
         m.setattr(world.uow, "commit", broken_commit)
@@ -298,7 +492,7 @@ def test_concurrent_save_after_push_is_retried(world: World, ours: Campaign, mon
 
     def save_conflicting_once(campaign: Campaign) -> None:
         attempts.append(campaign.version)
-        if len(attempts) == 1:
+        if len(attempts) == 2:
             raise ConcurrencyConflict(campaign.id)
         real_save(campaign)
 
@@ -306,7 +500,7 @@ def test_concurrent_save_after_push_is_retried(world: World, ours: Campaign, mon
 
     campaign = push(world, ours)
 
-    assert len(attempts) == 2
+    assert len(attempts) == 3
     assert not campaign.has_draft
     assert not world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
 
@@ -318,8 +512,14 @@ def test_concurrent_change_of_pushed_stream_is_reported(
     real_save = world.repo.save
 
     def other_tab_wins(campaign: Campaign) -> None:
+        if campaign.push_in_progress is not None:  # захват проходит
+            real_save(campaign)
+            return
         monkeypatch.setattr(world.repo, "save", real_save)
-        pin_other(world, ours, 80)  # другая вкладка успела изменить поток
+        changed = world.repo.get(campaign.id)
+        changed.pin(offers_stream(ours), OTHER.id, 80)  # имитация сторонней записи в обход команд
+        real_save(changed)
+        world.uow.commit()
         raise ConcurrencyConflict(campaign.id)
 
     monkeypatch.setattr(world.repo, "save", other_tab_wins)
@@ -343,9 +543,97 @@ def test_stale_version_is_rejected(world: World, ours: Campaign) -> None:
     assert world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
 
 
+def test_push_rejects_campaign_renamed_outside_prefix(world: World, ours: Campaign) -> None:
+    from dataclasses import replace
+
+    add_other(world, ours)
+    world.keitaro.campaigns[ours.id] = replace(world.keitaro.campaigns[ours.id], name="foreign_campaign")
+    open_campaign(world.repo, world.keitaro, world.uow, ours.id)
+    world.keitaro.calls.clear()
+
+    with pytest.raises(NotOurCampaign):
+        push(world, ours)
+
+    assert "publish_offers" not in world.keitaro.calls
+    assert world.repo.get(ours.id).has_draft
+
+
+def test_push_rejects_stream_no_longer_in_campaign(world: World, ours: Campaign) -> None:
+    from dataclasses import replace
+    from app.domain.campaigns.errors import StreamNotInCampaign
+
+    add_other(world, ours)
+    current = world.keitaro.campaigns[ours.id]
+    world.keitaro.campaigns[ours.id] = replace(current, streams=(current.streams[0],))
+    world.keitaro.calls.clear()
+    with pytest.raises(StreamNotInCampaign):
+        push(world, ours)
+    assert "publish_offers" not in world.keitaro.calls
+
+
 def test_current_version_is_accepted(world: World, ours: Campaign) -> None:
     campaign = add_other(world, ours)
     cancelled = edit_stream.cancel_stream(
         world.repo, world.uow, ours.id, offers_stream(ours), expected_version=campaign.version
     )[1]
     assert [c.offer.id for c in cancelled] == [FLEXACIL.id, OTHER.id]
+
+
+# ---------- поток поменяли в Keitaro между Fetch и Push ----------
+
+
+def test_push_does_not_overwrite_change_made_in_keitaro_after_fetch(world: World, ours: Campaign) -> None:
+    add_other(world, ours)  # черновик 50/50
+    world.keitaro.edit_stream(offers_stream(ours), [PublishedOffer(FLEXACIL, 70), PublishedOffer(OTHER, 30)])
+    world.keitaro.calls.clear()
+
+    with pytest.raises(StreamChangedInKeitaro) as exc:
+        push(world, ours)
+
+    assert exc.value.differences == [
+        f"в Keitaro у оффера [{FLEXACIL.id}] вес 100% → 70%",
+        f"в Keitaro добавлен или включён оффер [{OTHER.id}] (30%)",
+    ]
+    assert "publish_offers" not in world.keitaro.calls
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 70, OTHER.id: 30}  # правка в Keitaro цела
+    stored = world.repo.get(ours.id)
+    assert stored is not None and stored.has_draft and stored.push_in_progress is None
+
+
+def test_push_after_fetch_publishes_again(world: World, ours: Campaign) -> None:
+    world.keitaro.edit_stream(offers_stream(ours), [PublishedOffer(FLEXACIL, 70), PublishedOffer(OTHER, 30)])
+    fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+    edit_stream.pin(world.repo, world.uow, ours.id, offers_stream(ours), OTHER.id, 60)
+
+    push(world, ours)
+
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 40, OTHER.id: 60}
+
+
+def test_pin_drift_is_not_reported_as_change_in_keitaro(world: World, ours: Campaign) -> None:
+    """Закреплённый вес поменяли в Keitaro, Fetch это уже увидел — Push возвращает закреплённый вес."""
+    add_other(world, ours)
+    pin_other(world, ours, 70)
+    push(world, ours)
+    world.keitaro.edit_stream(offers_stream(ours), [PublishedOffer(FLEXACIL, 50), PublishedOffer(OTHER, 50)])
+    fetch_streams(world.repo, world.keitaro, world.uow, ours.id)
+
+    push(world, ours)
+
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 30, OTHER.id: 70}
+
+
+def test_user_can_push_over_change_in_keitaro_without_losing_draft(world: World, ours: Campaign) -> None:
+    add_other(world, ours)  # черновик 50/50
+    world.keitaro.edit_stream(offers_stream(ours), [PublishedOffer(FLEXACIL, 70), PublishedOffer(OTHER, 30)])
+    with pytest.raises(StreamChangedInKeitaro):
+        push(world, ours)
+
+    campaign = push_stream(
+        world.repo, world.keitaro, world.uow, ours.id, offers_stream(ours), prefix=PREFIX,
+        overwrite_keitaro_changes=True,
+    )
+
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 50, OTHER.id: 50}
+    assert not campaign.has_draft
+

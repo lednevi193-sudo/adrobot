@@ -55,9 +55,12 @@ class Stream:
         self.name, self.position = snapshot.name, snapshot.position
         if snapshot.offers:
             self.kind = StreamKind.OFFERS
-        result = merge_published(self.assignments, snapshot.offers, self._next_order())
+        result = merge_published(self.assignments, snapshot.offers)
         self.assignments = result.assignments
-        if result.needs_rebalance:
+        # Веса активных в Keitaro могут не давать 100: например, выключенный в Keitaro оффер
+        # остаётся там со своим весом, а в раздачу обёртки не попадает. Тогда пересчитываем,
+        # иначе Push заблокирован суммой ≠ 100, хотя пользователь ничего не менял.
+        if result.needs_rebalance or sum(a.desired.share for a in self._rotation()) != 100:
             self._rebalance()
 
     # ---------- команды редактора ----------
@@ -84,11 +87,10 @@ class Stream:
         if a.desired.in_rotation:
             raise OfferAlreadyInRotation(offer_id)
         if a.is_published:
-            # отмена ещё не опубликованного удаления: вернуть как было в Keitaro
+            # отмена неопубликованного удаления: оффер вернётся, снятое закрепление — нет
             assert a.published is not None
             p = a.published
-            keep_pin = p.pinned and self._pinned_total(exclude=a) + p.share <= 100
-            a.desired = DesiredState(True, p.share, keep_pin)
+            a.desired = DesiredState(True, p.share)  # Remove снимает закрепление (Q8)
         else:
             a.desired = DesiredState(True)  # из архива — незакреплённым (Q8)
         self._rebalance()
@@ -110,10 +112,16 @@ class Stream:
         «принять вес из Keitaro» (FR-2.9a): веса берутся из Keitaro, а не делятся заново."""
         a = self._get_in_rotation(offer_id)
         p = a.published
-        accept_keitaro = a.desired.pinned and a.is_published and p is not None and p.share != a.desired.share
+        accept_keitaro = a.desired.pinned and p is not None and p.has_pin_drift
         a.desired = replace(a.desired, pinned=False)
         if not (accept_keitaro and self._take_keitaro_shares()):
             self._rebalance()
+            return
+        # Принять вес из Keitaro — значит согласиться с тем, что там уже лежит. Если после этого
+        # обёртка совпадает с Keitaro целиком, публиковать нечего: снятие закрепления сразу
+        # становится опубликованным, иначе поток оставался бы жёлтым, а Cancel вернул бы закрепление.
+        if p is not None and not any(x.is_changed for x in self.assignments if x is not a):
+            a.published = replace(p, pinned=False, pinned_share=None)
 
     # ---------- черновик: просмотр, отмена, публикация ----------
 
@@ -180,7 +188,11 @@ class Stream:
         """
         published = [a for a in self._ordered() if a.published is not None]
         baseline = {a.offer.id: a.published_desired() for a in published}
-        if any(a.published is not None and a.published.has_pin_drift for a in published):
+        # Как в sync_from_keitaro: закреплённый вес разошёлся с Keitaro или веса Keitaro не дают 100
+        # (например, включили оффер, выключенный со своим весом) — пересчитать, иначе Cancel вернул бы
+        # раздачу, которую нельзя опубликовать.
+        in_rotation_total = sum(d.share for d in baseline.values() if d.in_rotation)
+        if in_rotation_total != 100 or any(a.published is not None and a.published.has_pin_drift for a in published):
             rotation = [a.offer.id for a in published if baseline[a.offer.id].in_rotation]
             shares = distribute_shares([Slot(i, baseline[i].share if baseline[i].pinned else None) for i in rotation])
             for i in rotation:

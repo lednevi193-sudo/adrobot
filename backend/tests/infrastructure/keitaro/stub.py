@@ -46,5 +46,5 @@ class KeitaroStub:
     def client(self) -> KeitaroClient:
         return KeitaroClient.from_settings(settings(), transport=httpx.MockTransport(self.handle))
 
-    def gateway(self) -> HttpKeitaroGateway:
-        return HttpKeitaroGateway(self.client(), PLACEMENT, alias_factory=lambda: "Abc12345")
+    def gateway(self, **options) -> HttpKeitaroGateway:
+        return HttpKeitaroGateway(self.client(), PLACEMENT, alias_factory=lambda: "Abc12345", **options)

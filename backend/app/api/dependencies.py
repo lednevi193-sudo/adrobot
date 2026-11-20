@@ -36,6 +36,14 @@ def get_prefix() -> str:
     return get_settings().campaign_prefix
 
 
+def get_push_lease_seconds() -> float:
+    return get_settings().push_lease_minutes * 60
+
+
+def get_keitaro_timeout() -> float:
+    return get_settings().keitaro_timeout
+
+
 def get_expected_version(
     if_match: Annotated[str | None, Header(description="Версия кампании (поле version), которую видел пользователь")] = None,
 ) -> int | None:
@@ -54,3 +62,5 @@ Uow = Annotated[UnitOfWork, Depends(get_unit_of_work)]
 Keitaro = Annotated[KeitaroGateway, Depends(get_keitaro)]
 Prefix = Annotated[str, Depends(get_prefix)]
 ExpectedVersion = Annotated[int | None, Depends(get_expected_version)]
+PushLeaseSeconds = Annotated[float, Depends(get_push_lease_seconds)]
+KeitaroTimeoutSeconds = Annotated[float, Depends(get_keitaro_timeout)]

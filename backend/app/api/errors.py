@@ -19,6 +19,8 @@ from app.application.errors import (
     NotOurCampaign,
     OfferNotFound,
     PushNotConfirmed,
+    StreamChangedInKeitaro,
+    PushInProgress,
 )
 from app.domain.campaigns.errors import CampaignHasDrafts, OfferNotInStream, StreamNotInCampaign
 from app.domain.common.errors import DomainError
@@ -37,6 +39,8 @@ STATUS: dict[type[Exception], int] = {
     KeitaroError: 502,  # сбой внешней системы, а не наш
     CampaignCreationFailed: 502,
     PushNotConfirmed: 502,
+    StreamChangedInKeitaro: 409,
+    PushInProgress: 409,
     KeitaroUnavailable: 504,
 }
 
@@ -48,10 +52,11 @@ def status_for(error: Exception) -> int:
 def error_body(error: DomainError | ApplicationError) -> dict:
     body: dict = {"code": error.code, "message": error.message}
     if isinstance(error, CampaignHasDrafts):
+        body["version"] = error.version
         body["changes"] = [
             dto.model_dump() for sid, changes in error.changes.items() for dto in change_dtos(sid, changes)
         ]
-    if isinstance(error, PushNotConfirmed):
+    if isinstance(error, PushNotConfirmed | StreamChangedInKeitaro):
         body["differences"] = error.differences
     return body
 

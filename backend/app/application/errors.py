@@ -84,6 +84,19 @@ class PushNotConfirmed(ApplicationError):
         self.differences = differences
 
 
+class StreamChangedInKeitaro(ApplicationError):
+    """Поток поменяли в Keitaro после последнего Fetch — Push затёр бы эту правку. В Keitaro ничего не записано."""
+
+    code = "stream_changed_in_keitaro"
+
+    def __init__(self, stream_id: int, differences: list[str]) -> None:
+        super().__init__(
+            f"Поток {stream_id} поменяли в Keitaro после последнего Fetch — Push не выполнен, "
+            "чтобы не затереть эту правку. Сделайте Fetch, проверьте поток и повторите Push"
+        )
+        self.differences = differences
+
+
 class ConcurrencyConflict(ApplicationError):
     code = "concurrency_conflict"
 
@@ -92,3 +105,10 @@ class ConcurrencyConflict(ApplicationError):
             f"Кампанию {campaign_id} только что изменили в другой вкладке или другим пользователем. "
             "Проверьте актуальное состояние кампании и повторите действие"
         )
+
+
+class PushInProgress(ApplicationError):
+    code = "push_in_progress"
+
+    def __init__(self, stream_id: int) -> None:
+        super().__init__(f"Push потока {stream_id} уже выполняется. Дождитесь завершения и повторите действие")

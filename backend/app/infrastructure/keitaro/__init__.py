@@ -13,7 +13,7 @@ def build_keitaro_gateway(settings: Settings) -> HttpKeitaroGateway:
         group_id=settings.keitaro_group_id,
         traffic_source_id=settings.keitaro_traffic_source_id,
     )
-    return HttpKeitaroGateway(KeitaroClient.from_settings(settings), placement)
+    return HttpKeitaroGateway(KeitaroClient.from_settings(settings), placement, offers_ttl=settings.keitaro_offers_ttl)
 
 
 __all__ = ["CampaignPlacement", "HttpKeitaroGateway", "KeitaroClient", "build_keitaro_gateway"]

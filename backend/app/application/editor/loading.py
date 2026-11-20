@@ -7,7 +7,9 @@ from app.domain.common.ids import CampaignId
 
 
 def load_campaign(
-    repo: CampaignRepository, campaign_id: CampaignId, expected_version: int | None = None
+    repo: CampaignRepository,
+    campaign_id: CampaignId,
+    expected_version: int | None = None,
 ) -> Campaign:
     """Кампания, уже открытая в обёртке. Ещё не открытую открывает open_campaign.
 

@@ -153,3 +153,116 @@ def test_stale_aggregate_is_rejected(session_factory: sessionmaker[Session]) -> 
     with session_factory() as s, pytest.raises(ConcurrencyConflict):
         stale.remove_offer(OFFERS, A.id)
         SqlCampaignRepository(s).save(stale)
+
+
+def test_push_releases_transaction_and_row_lock_during_keitaro(session_factory: sessionmaker[Session], monkeypatch) -> None:
+    from app.application.editor.edit_stream import pin
+    from app.application.editor.push_stream import push_stream
+    from app.application.errors import PushInProgress
+    from tests.fakes.keitaro_gateway import FakeKeitaroGateway
+
+    campaign = make_campaign()
+    campaign.pin(OFFERS, B.id, 70)
+    store(session_factory, campaign)
+    gateway = FakeKeitaroGateway(campaigns={CID: KeitaroCampaign(
+        CID, campaign.name, campaign.alias, campaign.domain_url,
+        (KeitaroStream(OFFERS, "Offers", 2, (PublishedOffer(A, 50), PublishedOffer(B, 50))),),
+    )})
+    probed = False
+    with session_factory() as session:
+        def checked(method):
+            def call(*args, **kwargs):
+                nonlocal probed
+                assert not session.in_transaction(), "HTTP must run outside a database transaction"
+                with session_factory() as other:
+                    other.execute(text("SELECT id FROM campaigns WHERE id=:id FOR UPDATE NOWAIT"), {"id": CID})
+                    other.rollback()
+                if not probed:
+                    probed = True
+                    with session_factory() as other, pytest.raises(ConcurrencyConflict):
+                        push_stream(SqlCampaignRepository(other), gateway, other, CID, OFFERS,
+                                    prefix="test_x_", expected_version=campaign.version)
+                    with session_factory() as other, pytest.raises(PushInProgress):
+                        push_stream(SqlCampaignRepository(other), gateway, other, CID, OFFERS, prefix="test_x_")
+                    with session_factory() as other, pytest.raises(PushInProgress):
+                        pin(SqlCampaignRepository(other), other, CID, OFFERS, B.id, 80)
+                return method(*args, **kwargs)
+            return call
+        for name in ('get_campaign_name', 'get_stream', 'publish_offers'):
+            monkeypatch.setattr(gateway, name, checked(getattr(gateway, name)))
+        result = push_stream(SqlCampaignRepository(session), gateway, session, CID, OFFERS,
+                             prefix="test_x_", expected_version=campaign.version)
+        assert not session.in_transaction()
+    assert probed and result.push_in_progress is None and not result.has_draft
+    assert gateway.calls.count('publish_offers') == 1
+    assert {o.offer.id: o.share for o in gateway.get_campaign(CID).streams[0].offers} == {A.id: 30, B.id: 70}
+
+
+def test_load_refreshes_previously_read_record(session_factory: sessionmaker[Session]) -> None:
+    from app.infrastructure.persistence.records import CampaignRecord
+
+    store(session_factory, make_campaign())
+    with session_factory() as first, session_factory() as second:
+        cached = first.get(CampaignRecord, CID)  # retain identity-map entry
+        changed = SqlCampaignRepository(second).get(CID)
+        changed.pin(OFFERS, A.id, 60)
+        SqlCampaignRepository(second).save(changed)
+        second.commit()
+        fresh = SqlCampaignRepository(first).get(CID)
+        assert fresh.version == cached.version == changed.version
+        assert fresh.stream(OFFERS).assignments[0].desired.share == 60
+
+
+
+def test_push_marker_survives_document_roundtrip(session_factory: sessionmaker[Session]) -> None:
+    from datetime import UTC, datetime
+    from app.domain.campaigns import PushLease
+    campaign = make_campaign()
+    campaign.push_in_progress = PushLease(OFFERS, datetime(2026, 11, 20, tzinfo=UTC), 'owner-token')
+    store(session_factory, campaign)
+    assert load(session_factory) == campaign
+
+
+def test_old_document_without_push_marker_loads(session_factory: sessionmaker[Session]) -> None:
+    store(session_factory, make_campaign())
+    with session_factory() as session:
+        session.execute(text("UPDATE campaigns SET streams=streams - 'push_in_progress' WHERE id=:id"), {'id': CID})
+        session.commit()
+    assert load(session_factory).push_in_progress is None
+
+
+def test_only_one_push_claim_can_save_the_same_version(session_factory: sessionmaker[Session]) -> None:
+    from datetime import UTC, datetime
+    from app.domain.campaigns import PushLease
+    store(session_factory, make_campaign())
+    with session_factory() as first, session_factory() as second:
+        repo1, repo2 = SqlCampaignRepository(first), SqlCampaignRepository(second)
+        a, b = repo1.get(CID), repo2.get(CID)
+        a.push_in_progress = PushLease(OFFERS, datetime.now(UTC), 'first')
+        b.push_in_progress = PushLease(OFFERS, datetime.now(UTC), 'second')
+        repo1.save(a)
+        first.commit()
+        with pytest.raises(ConcurrencyConflict):
+            repo2.save(b)
+    assert load(session_factory).push_in_progress.token == 'first'
+
+
+@pytest.mark.parametrize('operation', ['open', 'fetch'])
+def test_loading_keitaro_does_not_hold_read_transaction(session_factory: sessionmaker[Session], operation) -> None:
+    from app.application.editor.open_campaign import open_campaign
+    from app.application.editor.fetch_streams import fetch_streams
+    from tests.fakes.keitaro_gateway import FakeKeitaroGateway
+    campaign = make_campaign()
+    store(session_factory, campaign)
+    gateway = FakeKeitaroGateway(campaigns={CID: KeitaroCampaign(
+        CID, campaign.name, campaign.alias, campaign.domain_url,
+        (KeitaroStream(GEO, 'Geo AU → Google', 1), KeitaroStream(OFFERS, 'Offers', 2, (PublishedOffer(A, 50), PublishedOffer(B, 50)))),
+    )})
+    with session_factory() as session:
+        original = gateway.get_campaign
+        def checked(cid):
+            assert not session.in_transaction()
+            return original(cid)
+        gateway.get_campaign = checked
+        call = open_campaign if operation == 'open' else fetch_streams
+        call(SqlCampaignRepository(session), gateway, session, CID)

@@ -15,6 +15,10 @@ import type { CampaignView, DraftChangeDto } from './api/types'
 
 export const CAMPAIGN_HAS_DRAFTS = 'campaign_has_drafts'
 export const CONCURRENCY_CONFLICT = 'concurrency_conflict'
+export const STREAM_CHANGED_IN_KEITARO = 'stream_changed_in_keitaro'
+
+/** Итог Push: готово, нужно решение пользователя (поток поменяли в Keitaro после Fetch) или ошибка. */
+export type PushOutcome = { kind: 'done' } | { kind: 'needs_confirmation'; differences: string[] } | { kind: 'failed' }
 
 export interface EditorError {
   /** null — ошибка кампании целиком (открыть, Fetch). */
@@ -23,7 +27,7 @@ export interface EditorError {
 }
 
 /** Итог Fetch: готово, или нужно подтверждение потери черновика (FR-2.3a). */
-export type FetchOutcome = { kind: 'done' } | { kind: 'needs_confirmation'; changes: DraftChangeDto[] } | { kind: 'failed' }
+export type FetchOutcome = { kind: 'done' } | { kind: 'needs_confirmation'; changes: DraftChangeDto[]; version: number } | { kind: 'failed' }
 
 export function useCampaignEditor(campaignId: number) {
   const campaign = shallowRef<CampaignView | null>(null)
@@ -80,20 +84,47 @@ export function useCampaignEditor(campaignId: number) {
   }
 
   /** Fetch streams. При черновике бэкенд отвечает 409 со списком changes — его отдаём странице. */
-  async function fetchStreams(discardDrafts = false): Promise<FetchOutcome> {
+  async function fetchStreams(discardDrafts = false, confirmedVersion?: number): Promise<FetchOutcome> {
     busy.value = 'fetch'
     lastError.value = null
     try {
-      campaign.value = await fetchStreamsApi(campaignId, discardDrafts, campaign.value?.version)
+      campaign.value = await fetchStreamsApi(campaignId, discardDrafts, confirmedVersion ?? campaign.value?.version)
       keitaroChanges.value = []
       return { kind: 'done' }
     } catch (e) {
       const error = asApiError(e)
-      if (error.code === CAMPAIGN_HAS_DRAFTS && !discardDrafts) {
-        return { kind: 'needs_confirmation', changes: error.detail<DraftChangeDto[]>('changes') ?? [] }
+      const version = error.detail<number>('version')
+      if (error.code === CAMPAIGN_HAS_DRAFTS && !discardDrafts && typeof version === 'number') {
+        return { kind: 'needs_confirmation', changes: error.detail<DraftChangeDto[]>('changes') ?? [], version }
       }
       lastError.value = { streamId: null, error }
       if (error.code === CONCURRENCY_CONFLICT) await refresh()
+      return { kind: 'failed' }
+    } finally {
+      busy.value = null
+    }
+  }
+
+  /**
+   * Push. Неудачный Push всё равно меняет версию кампании (отметка «Push выполняется» ставится
+   * и снимается в БД), поэтому после любой ошибки перечитываем кампанию — иначе следующая
+   * команда уйдёт со старой версией и получит ложный конфликт.
+   */
+  async function push(sid: number, overwrite = false): Promise<PushOutcome> {
+    busy.value = `push:${sid}`
+    lastError.value = null
+    try {
+      campaign.value = await streamsApi.push(ref_(sid), overwrite)
+      // Плашка «в Keitaro есть изменения» могла устареть: Push их перекрыл — сверяемся заново.
+      if (keitaroChanges.value.length) await refresh()
+      return { kind: 'done' }
+    } catch (e) {
+      const error = asApiError(e)
+      await refresh()
+      if (error.code === STREAM_CHANGED_IN_KEITARO && !overwrite) {
+        return { kind: 'needs_confirmation', differences: error.detail<string[]>('differences') ?? [] }
+      }
+      lastError.value = { streamId: sid, error }
       return { kind: 'failed' }
     } finally {
       busy.value = null
@@ -106,11 +137,11 @@ export function useCampaignEditor(campaignId: number) {
     bringBack: (sid: number, oid: number) => apply(`bring-back:${sid}:${oid}`, sid, () => streamsApi.bringBack(ref_(sid), oid)),
     pin: (sid: number, oid: number, share?: number) => apply(`pin:${sid}:${oid}`, sid, () => streamsApi.pin(ref_(sid), oid, share)),
     unpin: (sid: number, oid: number) => apply(`unpin:${sid}:${oid}`, sid, () => streamsApi.unpin(ref_(sid), oid)),
-    push: (sid: number) => apply(`push:${sid}`, sid, () => streamsApi.push(ref_(sid))),
+    push,
     /** Список для подтверждения Cancel (FR-2.10a); undefined — не удалось загрузить. */
     draft: (sid: number) => run(`draft:${sid}`, sid, () => streamsApi.draft(ref_(sid))),
-    cancel: (sid: number) =>
-      apply(`cancel:${sid}`, sid, async () => (await streamsApi.cancel(ref_(sid))).campaign),
+    cancel: (sid: number, version = campaign.value?.version) =>
+      apply(`cancel:${sid}`, sid, async () => (await streamsApi.cancel({ campaignId, streamId: sid, version })).campaign),
   }
 
   const clearError = () => (lastError.value = null)

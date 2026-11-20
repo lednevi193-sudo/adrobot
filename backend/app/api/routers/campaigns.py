@@ -6,7 +6,7 @@ SQLAlchemy и httpx на время ожидания I/O отпускают GIL.
 
 from fastapi import APIRouter, status
 
-from app.api.dependencies import ExpectedVersion, Keitaro, Prefix, Repo, Uow
+from app.api.dependencies import ExpectedVersion, Keitaro, Prefix, Repo, Uow, PushLeaseSeconds
 from app.api.presenters import campaign_view
 from app.api.schemas import (
     CampaignSummaryDto,
@@ -47,9 +47,9 @@ def create(body: CreateCampaignRequest, repo: Repo, keitaro: Keitaro, uow: Uow, 
 
 
 @router.get("/{campaign_id}", responses={404: {"model": ErrorResponse}})
-def open_(campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix) -> OpenCampaignResponse:
+def open_(campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix, lease_seconds: PushLeaseSeconds) -> OpenCampaignResponse:
     """Сверяет кампанию с Keitaro; при черновике не трогает её, а возвращает keitaro_changes."""
-    opened = open_campaign(repo, keitaro, uow, CampaignId(campaign_id))
+    opened = open_campaign(repo, keitaro, uow, CampaignId(campaign_id), lease_seconds=lease_seconds)
     return OpenCampaignResponse(campaign=campaign_view(opened.campaign, prefix), keitaro_changes=opened.keitaro_changes)
 
 
@@ -61,6 +61,7 @@ def fetch(
     uow: Uow,
     prefix: Prefix,
     version: ExpectedVersion,
+    lease_seconds: PushLeaseSeconds,
     body: FetchRequest | None = None,
 ) -> CampaignView:
     """409 campaign_has_drafts с полем changes — показать подтверждение и повторить с discard_drafts=true.
@@ -69,6 +70,6 @@ def fetch(
     """
     discard = body.discard_drafts if body else False
     campaign = fetch_streams(
-        repo, keitaro, uow, CampaignId(campaign_id), discard_drafts=discard, expected_version=version
+        repo, keitaro, uow, CampaignId(campaign_id), discard_drafts=discard, expected_version=version, lease_seconds=lease_seconds
     )
     return campaign_view(campaign, prefix)

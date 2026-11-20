@@ -7,7 +7,7 @@ Pydantic здесь — контракт формата хранения: при
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 SCHEMA_VERSION = 1
 
@@ -45,6 +45,13 @@ class StreamDoc(_Doc):
     assignments: list[AssignmentDoc]
 
 
+class PushLeaseDoc(_Doc):
+    stream_id: int
+    started_at: AwareDatetime
+    token: str
+
+
 class StreamsDocument(_Doc):
     schema_version: Literal[1] = SCHEMA_VERSION
     streams: list[StreamDoc]
+    push_in_progress: PushLeaseDoc | None = None

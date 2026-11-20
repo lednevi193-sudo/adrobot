@@ -19,8 +19,7 @@ class InMemoryCampaignRepository:
     pending: dict[CampaignId, Campaign] = field(default_factory=dict)
 
     def get(self, campaign_id: CampaignId) -> Campaign | None:
-        found = self.pending.get(campaign_id) or self.committed.get(campaign_id)
-        return deepcopy(found)
+        return deepcopy(self.pending.get(campaign_id) or self.committed.get(campaign_id))
 
     def list(self) -> list[Campaign]:
         merged = {**self.committed, **self.pending}

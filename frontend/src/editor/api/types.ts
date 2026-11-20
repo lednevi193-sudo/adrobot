@@ -75,3 +75,8 @@ export interface CancelResponse {
   campaign: CampaignView
   cancelled: DraftChangeDto[]
 }
+
+export interface DraftResponse {
+  version: number
+  changes: DraftChangeDto[]
+}

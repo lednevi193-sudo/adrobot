@@ -31,6 +31,7 @@ clearOnEdit('geos', () => form.geos)
 clearOnEdit('offer', () => form.offerId)
 
 async function submit() {
+  if (creating.value) return
   error.value = null
   fieldErrors.value = requiredFieldErrors(form)
   if (Object.keys(fieldErrors.value).length || form.offerId === null) return

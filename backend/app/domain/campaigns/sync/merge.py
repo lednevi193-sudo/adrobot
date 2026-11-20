@@ -20,28 +20,33 @@ class MergeResult:
 
 
 def merge_published(
-    assignments: Sequence[OfferAssignment], offers: Sequence[PublishedOffer], next_order: int
+    assignments: Sequence[OfferAssignment], offers: Sequence[PublishedOffer]
 ) -> MergeResult:
     """Применяет к привязкам то, что сейчас лежит в Keitaro.
 
     - оффер исчез из Keitaro -> в архив (removed), а не удаляется;
     - оффер есть в Keitaro -> опубликованное := Keitaro, желаемое := Keitaro,
       кроме закреплённого веса: его Keitaro не перетирает (Q7);
-    - новый в Keitaro -> активная привязка в конце, в порядке Keitaro.
+    - активные привязки получают актуальный порядок Keitaro, архивные идут следом.
     """
     from_keitaro = {o.offer.id: o for o in offers}
+    order = {o.offer.id: i for i, o in enumerate(offers, 1)}
+    archive_order = len(offers) + 1
     needs_rebalance = False
     merged: list[OfferAssignment] = []
 
-    for a in assignments:
+    for a in sorted(assignments, key=lambda a: a.order):
         ko = from_keitaro.pop(a.offer.id, None)
         if ko is None:
             if a.published is not None:  # ни разу не публиковавшуюся просто забываем
                 a.published, a.desired = ARCHIVED, EXCLUDED
+                a.order = archive_order
+                archive_order += 1
                 merged.append(a)
             continue
 
         a.offer = ko.offer  # обновить снимок имени
+        a.order = order[ko.offer.id]
         if a.desired.in_rotation and a.desired.pinned:
             # закреплённый вес Keitaro не перетирает (Q7); помним, какой вес закрепляли при Push,
             # чтобы повторный Fetch или Cancel вернули его, а не вес из Keitaro (FR-2.15)
@@ -56,10 +61,10 @@ def merge_published(
             a.desired = DesiredState(True, ko.share)
         merged.append(a)
 
-    for i, ko in enumerate(from_keitaro.values()):
+    for ko in from_keitaro.values():
         merged.append(
             OfferAssignment(
-                ko.offer, next_order + i, DesiredState(True, ko.share), PublishedState(True, ko.share)
+                ko.offer, order[ko.offer.id], DesiredState(True, ko.share), PublishedState(True, ko.share)
             )
         )
-    return MergeResult(merged, needs_rebalance)
+    return MergeResult(sorted(merged, key=lambda a: a.order), needs_rebalance)

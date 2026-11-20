@@ -1,6 +1,17 @@
 <script setup lang="ts">
 // Каркас приложения (≈ MainLayout.razor): провайдеры Naive UI, навигация, место для страницы.
-import { NConfigProvider, NDialogProvider, NLayout, NLayoutContent, NLayoutHeader, NMessageProvider, NSpace } from 'naive-ui'
+import { onMounted, ref } from 'vue'
+import { NAlert, NConfigProvider, NDialogProvider, NLayout, NLayoutContent, NLayoutHeader, NMessageProvider, NSpace } from 'naive-ui'
+import { http } from '@/shared/api/http'
+
+const demo = ref(false)
+onMounted(async () => {
+  try {
+    demo.value = (await http.get<{ mode: 'live' | 'demo' }>('/runtime')).mode === 'demo'
+  } catch {
+    // Ошибки основных запросов показывают соответствующие страницы.
+  }
+})
 </script>
 
 <template>
@@ -13,9 +24,13 @@ import { NConfigProvider, NDialogProvider, NLayout, NLayoutContent, NLayoutHeade
               <b>Adrobot</b>
               <router-link to="/campaigns">Кампании</router-link>
               <router-link to="/create">Создать кампанию</router-link>
+              <router-link v-if="demo" to="/demo/keitaro">Демо-Keitaro</router-link>
             </n-space>
           </n-layout-header>
           <n-layout-content class="content" content-style="max-width: 1100px; margin: 0 auto;">
+            <n-alert v-if="demo" type="warning" class="demo-banner">
+              Деморежим: 3 тестовых оффера, без реального трафика. Изменения сбросятся при перезапуске.
+            </n-alert>
             <!-- key: при переходе между кампаниями страница создаётся заново со своим состоянием -->
             <router-view :key="$route.fullPath" />
           </n-layout-content>
@@ -40,6 +55,9 @@ body {
   padding: 16px 24px;
   min-height: calc(100vh - 50px);
   background: #f5f6f8;
+}
+.demo-banner {
+  margin-bottom: 16px;
 }
 .header a {
   text-decoration: none;

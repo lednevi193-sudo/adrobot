@@ -4,7 +4,7 @@
  * Версия уходит в If-Match: если кампанию изменили в другой вкладке, бэкенд ответит 409.
  */
 import { http } from '@/shared/api/http'
-import type { CampaignView, CancelResponse, DraftChangeDto } from './types'
+import type { CampaignView, CancelResponse, DraftResponse } from './types'
 
 export interface StreamRef {
   campaignId: number
@@ -27,7 +27,9 @@ export const streamsApi = {
     http.put<CampaignView>(`${offer(s, offerId)}/pin`, { share: share ?? null }, v(s)),
   unpin: (s: StreamRef, offerId: number) => http.delete<CampaignView>(`${offer(s, offerId)}/pin`, v(s)),
   /** Что отменит Cancel — для окна подтверждения (FR-2.10a). */
-  draft: (s: StreamRef) => http.get<DraftChangeDto[]>(`${base(s)}/draft`),
+  draft: (s: StreamRef) => http.get<DraftResponse>(`${base(s)}/draft`),
   cancel: (s: StreamRef) => http.post<CancelResponse>(`${base(s)}/cancel`, undefined, v(s)),
-  push: (s: StreamRef) => http.post<CampaignView>(`${base(s)}/push`, undefined, v(s)),
+  /** overwrite — опубликовать поверх правок в Keitaro, которые показал 409 stream_changed_in_keitaro. */
+  push: (s: StreamRef, overwrite = false) =>
+    http.post<CampaignView>(`${base(s)}/push`, overwrite ? { overwrite_keitaro_changes: true } : undefined, v(s)),
 }

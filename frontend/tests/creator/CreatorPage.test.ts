@@ -29,6 +29,19 @@ const respond = (status: number, body: unknown) => vi.stubGlobal('fetch', vi.fn(
 afterEach(() => vi.unstubAllGlobals())
 
 describe('CreatorPage', () => {
+  it('повторный submit во время Create не создаёт вторую кампанию', async () => {
+    let resolve!: (response: Response) => void
+    const fetchMock = vi.fn(() => new Promise<Response>((done) => { resolve = done }))
+    vi.stubGlobal('fetch', fetchMock)
+    const w = mountPage()
+    await fillAndSubmit(w)
+    await w.find('form').trigger('submit')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    resolve(jsonResponse(201, campaign({ id: 99 })))
+    await flushPromises()
+    expect(w.find('[data-test=created-id]').text()).toBe('99')
+    w.unmount()
+  })
   it('пустая форма — ошибки у полей, запрос не уходит', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

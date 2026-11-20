@@ -29,6 +29,7 @@ class CampaignHasDrafts(DomainError):
     def __init__(self, changes: "Mapping[int, Sequence[DraftChange]]") -> None:
         """changes — черновик по потокам: его UI показывает в подтверждении (FR-2.3a)."""
         self.changes = dict(changes)
+        self.version: int | None = None  # версия снимка для подтверждённого Fetch
         self.changes_count = sum(len(c) for c in self.changes.values())
         super().__init__(
             f"В кампании есть неопубликованные изменения ({self.changes_count}). "

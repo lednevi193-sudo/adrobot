@@ -9,7 +9,8 @@ from dataclasses import dataclass, field, replace
 from itertools import count
 
 from app.application.errors import CampaignNotFound, KeitaroError
-from app.application.ports import CampaignSummary
+from app.application.ports import CampaignSummary, InactiveStreamOffer, KeitaroStreamState
+from app.domain.campaigns.errors import StreamNotInCampaign
 from app.domain.campaigns import (
     GeoRedirectStreamSpec,
     KeitaroCampaign,
@@ -30,6 +31,7 @@ class FakeKeitaroGateway:
     campaigns: dict[CampaignId, KeitaroCampaign] = field(default_factory=dict)
     archived: set[CampaignId] = field(default_factory=set)
     calls: list[str] = field(default_factory=list)
+    inactive_offers: dict[StreamId, tuple[InactiveStreamOffer, ...]] = field(default_factory=dict)
     _ids: Iterable[int] = field(default_factory=lambda: count(1000))
 
     # ---------- чтение ----------
@@ -47,6 +49,21 @@ class FakeKeitaroGateway:
     def list_active_offers(self) -> list[OfferRef]:
         self._call("list_active_offers")
         return list(self.offers)
+
+    def get_campaign_name(self, campaign_id: CampaignId) -> str:
+        self._call("get_campaign_name")
+        if campaign_id not in self.campaigns:
+            raise CampaignNotFound(campaign_id)
+        return self.campaigns[campaign_id].name
+
+    def get_stream(self, stream_id: StreamId) -> KeitaroStreamState:
+        self._call("get_stream")
+        for campaign in self.campaigns.values():
+            for stream in campaign.streams:
+                if stream.id == stream_id:
+                    offers = tuple(PublishedOffer(OfferRef(o.offer.id, ""), o.share) for o in stream.offers)
+                    return KeitaroStreamState(stream_id, campaign.id, offers, self.inactive_offers.get(stream_id, ()))
+        raise StreamNotInCampaign(stream_id)
 
     # ---------- создаватор ----------
 
@@ -72,8 +89,13 @@ class FakeKeitaroGateway:
 
     # ---------- редактор ----------
 
-    def publish_offers(self, stream_id: StreamId, offers: Sequence[PublishedOffer]) -> None:
+    def publish_offers(
+        self, stream_id: StreamId, offers: Sequence[PublishedOffer], *, current: KeitaroStreamState | None = None,
+    ) -> None:
         self._call("publish_offers")
+        current = current if current is not None else self.get_stream(stream_id)
+        sent = {o.offer.id for o in offers}
+        self.inactive_offers[stream_id] = tuple(o for o in current.inactive_offers if o.offer_id not in sent)
         self.edit_stream(stream_id, offers)
 
     # ---------- для тестов: «правка руками в админке Keitaro» ----------
