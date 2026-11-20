@@ -74,6 +74,7 @@ class CampaignView(BaseModel):
     tracker_url: str | None
     is_ours: bool
     has_draft: bool
+    version: int = Field(description="Версия для If-Match в командах: защита от правки устаревшей вкладки")
     streams: list[StreamView]
 
 

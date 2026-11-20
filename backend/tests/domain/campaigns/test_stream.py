@@ -260,3 +260,103 @@ def test_sync_refreshes_offer_name(three: Stream) -> None:
     renamed = OfferRef(A.id, "A v2")
     three.sync_from_keitaro(snapshot((renamed, 34), (B, 33), (C, 33)))
     assert "A v2" in view(three)
+
+
+# ---------- Bring back закреплённого оффера, удалённого без Push ----------
+
+
+def test_bring_back_of_unpublished_removal_keeps_pin(three: Stream) -> None:
+    three.pin(A.id, 50)
+    push(three)
+    three.remove_offer(A.id)
+
+    three.bring_back(A.id)
+
+    assert view(three)["A"] == (S.ACTIVE, 50, True)
+    assert not three.has_draft
+
+
+def test_bring_back_drops_pin_that_would_exceed_100(three: Stream) -> None:
+    three.pin(A.id, 50)
+    push(three)
+    three.remove_offer(A.id)
+    three.pin(B.id, 60)
+
+    three.bring_back(A.id)
+
+    assert view(three)["A"][2] is False  # 60 + 50 > 100 — вернулся незакреплённым
+    assert sum(s for _, s, _ in view(three).values()) == 100
+
+
+# ---------- закреплённый вес против ручной правки в Keitaro (Q7, FR-2.9a, FR-2.15) ----------
+
+
+def drifted(three: Stream) -> Stream:
+    """A закреплён на 50 и опубликован; потом в админке Keitaro поставили 20/40/40."""
+    three.pin(A.id, 50)
+    push(three)
+    three.sync_from_keitaro(snapshot((A, 20), (B, 40), (C, 40)))
+    return three
+
+
+def test_drift_is_yellow_but_not_a_draft_to_cancel(three: Stream) -> None:
+    stream = drifted(three)
+    assert stream.has_draft  # жёлтый: в Keitaro не то, что закреплено
+    assert stream.draft_changes() == []  # но отменять нечего — пользователь ничего не менял
+
+
+def test_repeated_fetch_keeps_pinned_share(three: Stream) -> None:
+    stream = drifted(three)
+
+    stream.sync_from_keitaro(snapshot((A, 20), (B, 40), (C, 40)))
+
+    assert [s for _, s, _ in view(stream).values()] == [50, 25, 25]
+    assert view(stream)["A"][2] is True
+
+
+def test_cancel_after_drift_restores_pinned_share_not_keitaro(three: Stream) -> None:
+    stream = drifted(three)
+    stream.add_offer(D)
+
+    cancelled = stream.cancel()
+
+    assert [c.kind for c in cancelled] == [DraftChangeKind.SHARE, DraftChangeKind.SHARE, DraftChangeKind.ADD]
+    assert view(stream) == {"A": (S.ACTIVE, 50, True), "B": (S.ACTIVE, 25, False), "C": (S.ACTIVE, 25, False)}
+
+
+def test_unpin_after_drift_accepts_keitaro_shares(three: Stream) -> None:
+    stream = drifted(three)
+
+    stream.unpin(A.id)
+
+    assert view(stream) == {"A": (S.ACTIVE, 20, False), "B": (S.ACTIVE, 40, False), "C": (S.ACTIVE, 40, False)}
+    assert [c.kind for c in stream.draft_changes()] == [DraftChangeKind.UNPIN, DraftChangeKind.SHARE, DraftChangeKind.SHARE]
+    assert push(stream) == [("A", 20), ("B", 40), ("C", 40)]  # в Keitaro ничего не меняется
+    assert not stream.has_draft
+
+
+def test_unpin_after_drift_with_local_add_rebalances(three: Stream) -> None:
+    stream = drifted(three)
+    stream.add_offer(D)
+
+    stream.unpin(A.id)
+
+    assert [s for _, s, _ in view(stream).values()] == [25, 25, 25, 25]  # состав не как в Keitaro — пересчёт
+
+
+# ---------- черновик, который уже лежит в Keitaro ----------
+
+
+def test_draft_already_in_keitaro_is_adopted(three: Stream) -> None:
+    three.pin(A.id, 50)  # 50/25/25 — и именно это уже опубликовано, но mark_published не случился
+
+    assert three.adopt_published(snapshot((A, 50), (B, 25), (C, 25)).offers)
+
+    assert not three.has_draft
+    assert view(three)["A"] == (S.ACTIVE, 50, True)
+
+
+def test_draft_different_from_keitaro_is_not_adopted(three: Stream) -> None:
+    three.pin(A.id, 50)
+    assert not three.adopt_published(snapshot((A, 34), (B, 33), (C, 33)).offers)
+    assert three.has_draft

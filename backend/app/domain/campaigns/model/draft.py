@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from app.domain.campaigns.model.assignment import AssignmentStatus, OfferAssignment
+from app.domain.campaigns.model.assignment import EXCLUDED, DesiredState, OfferAssignment
 from app.domain.offers.offer_ref import OfferRef
 
 
@@ -25,20 +25,21 @@ class DraftChange:
     share_after: int | None
 
 
-def describe_change(a: OfferAssignment) -> DraftChange | None:
-    """Изменение привязки относительно опубликованного или None, если изменений нет."""
-    if not a.is_changed:
-        return None
-    match a.status:
-        case AssignmentStatus.PENDING_ADD:
-            return DraftChange(a.offer, DraftChangeKind.ADD, None, a.desired.share)
-        case AssignmentStatus.PENDING_REMOVE:
-            assert a.published is not None
-            return DraftChange(a.offer, DraftChangeKind.REMOVE, a.published.share, 0)
+def describe_change(a: OfferAssignment, before: DesiredState | None) -> DraftChange | None:
+    """Изменение привязки относительно опубликованного состояния before или None, если изменений нет.
 
-    assert a.published is not None  # ACTIVE: поменялся вес и/или закрепление
-    if a.desired.pinned != a.published.pinned:
-        kind = DraftChangeKind.PIN if a.desired.pinned else DraftChangeKind.UNPIN
+    before=None — привязка ни разу не публиковалась.
+    """
+    before = before or EXCLUDED
+    after = a.desired
+    if after == before:
+        return None
+    if not before.in_rotation:
+        return DraftChange(a.offer, DraftChangeKind.ADD, None, after.share)
+    if not after.in_rotation:
+        return DraftChange(a.offer, DraftChangeKind.REMOVE, before.share, 0)
+    if after.pinned != before.pinned:
+        kind = DraftChangeKind.PIN if after.pinned else DraftChangeKind.UNPIN
     else:
         kind = DraftChangeKind.SHARE
-    return DraftChange(a.offer, kind, a.published.share, a.desired.share)
+    return DraftChange(a.offer, kind, before.share, after.share)

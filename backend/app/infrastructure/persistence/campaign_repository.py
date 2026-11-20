@@ -2,6 +2,7 @@
 
 Репозиторий только читает и пишет агрегат; commit делает сценарий приложения
 (Session — это Unit of Work, граница транзакции — сценарий, а не репозиторий).
+Откат после ошибки — тоже дело сценария: репозиторий только переводит ошибки БД в ошибки приложения.
 """
 
 from collections.abc import Sequence
@@ -37,7 +38,6 @@ class SqlCampaignRepository:
         try:
             self._session.flush()  # INSERT сейчас, чтобы ошибку получить здесь, а не на commit
         except IntegrityError as e:
-            self._session.rollback()
             raise CampaignAlreadyExists(campaign.id) from e
         campaign.version = record.version
 
@@ -53,6 +53,5 @@ class SqlCampaignRepository:
         try:
             self._session.flush()  # UPDATE ... WHERE id = :id AND version = :прочитанная
         except StaleDataError as e:
-            self._session.rollback()
             raise ConcurrencyConflict(campaign.id) from e
         campaign.version = record.version

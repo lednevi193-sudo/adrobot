@@ -7,13 +7,12 @@ from app.domain.campaigns import KeitaroCampaign, KeitaroStream, PublishedOffer
 from app.domain.common.ids import CampaignId, OfferId, StreamId
 from app.domain.offers.offer_ref import OfferRef
 from app.infrastructure.keitaro.schemas import (
+    ACTIVE,
+    DELETED,
     KeitaroCampaignJson,
     KeitaroOfferJson,
     KeitaroStreamJson,
 )
-
-ACTIVE = "active"
-DELETED = "deleted"
 
 OfferNames = Mapping[int, str]
 

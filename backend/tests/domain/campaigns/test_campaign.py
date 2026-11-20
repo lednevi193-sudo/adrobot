@@ -98,3 +98,32 @@ def test_campaign_is_ours_by_name_prefix() -> None:
     assert Campaign(CampaignId(1), "test_x_promo", "a", None).is_ours("test_x_")
     assert not Campaign(CampaignId(1), "test_y_promo", "a", None).is_ours("test_x_")
     assert not Campaign(CampaignId(1), "promo", "a", None).is_ours("")  # префикс не настроен — «наших» нет
+
+
+def test_fetch_with_discard_after_drift_keeps_pinned_share(campaign: Campaign) -> None:
+    """FR-2.15: после повторных Fetch закреплённый вес — тот, что задал пользователь."""
+    campaign.add_offer(OFFERS, OTHER)
+    campaign.pin(OFFERS, OFFER.id, 70)
+    campaign.mark_published(OFFERS)
+    campaign.sync_from_keitaro(keitaro((OFFER, 60), (OTHER, 40)))  # руками поменяли в Keitaro
+    campaign.unpin(OFFERS, OTHER.id)  # любая локальная правка — черновик
+    campaign.pin(OFFERS, OTHER.id, 30)
+
+    with pytest.raises(CampaignHasDrafts):
+        campaign.sync_from_keitaro(keitaro((OFFER, 60), (OTHER, 40)))
+    campaign.sync_from_keitaro(keitaro((OFFER, 60), (OTHER, 40)), discard_drafts=True)
+
+    shares = {a.offer.id: (a.desired.share, a.desired.pinned) for a in campaign.stream(OFFERS).assignments}
+    assert shares == {OFFER.id: (70, True), OTHER.id: (30, False)}
+
+
+def test_fetch_adopts_draft_that_is_already_in_keitaro(campaign: Campaign) -> None:
+    """Push прошёл, а сохранить не удалось: Fetch не спрашивает и не откатывает (FR-2.13)."""
+    campaign.add_offer(OFFERS, OTHER)
+    campaign.pin(OFFERS, OTHER.id, 70)
+
+    campaign.sync_from_keitaro(keitaro((OFFER, 30), (OTHER, 70)))  # без discard_drafts
+
+    assert not campaign.has_draft
+    pinned = {a.offer.id: a.desired.pinned for a in campaign.stream(OFFERS).assignments}
+    assert pinned == {OFFER.id: False, OTHER.id: True}

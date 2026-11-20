@@ -4,6 +4,7 @@
 «internal», поэтому это соглашение, а не запрет компилятора.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -105,27 +106,53 @@ class Stream:
         self._rebalance()
 
     def unpin(self, offer_id: OfferId) -> None:
+        """Снять закрепление. Если закреплённый вес разошёлся с Keitaro — это выбор
+        «принять вес из Keitaro» (FR-2.9a): веса берутся из Keitaro, а не делятся заново."""
         a = self._get_in_rotation(offer_id)
+        p = a.published
+        accept_keitaro = a.desired.pinned and a.is_published and p is not None and p.share != a.desired.share
         a.desired = replace(a.desired, pinned=False)
-        self._rebalance()
+        if not (accept_keitaro and self._take_keitaro_shares()):
+            self._rebalance()
 
     # ---------- черновик: просмотр, отмена, публикация ----------
 
     @property
     def has_draft(self) -> bool:
-        """Поток «жёлтый»: есть неопубликованные изменения (FR-2.5)."""
+        """Поток «жёлтый»: желаемое расходится с Keitaro (FR-2.5).
+
+        Это черновик пользователя (draft_changes) и/или закреплённый вес, который поменяли
+        в Keitaro (FR-2.9a): второе Cancel не убирает — решают Push или Unpin.
+        """
         return any(a.is_changed for a in self.assignments)
 
     def draft_changes(self) -> list[DraftChange]:
-        return [c for a in self._ordered() if (c := describe_change(a)) is not None]
+        """Что отбросит Cancel: разница между текущим и опубликованным состоянием (FR-2.10a)."""
+        baseline = self._baseline()
+        return [c for a in self._ordered() if (c := describe_change(a, baseline.get(a.offer.id))) is not None]
 
     def cancel(self) -> list[DraftChange]:
         """Откатить поток к опубликованному снимку целиком, включая закрепления (FR-2.10, Q9)."""
         changes = self.draft_changes()
+        baseline = self._baseline()
         self.assignments = [a for a in self.assignments if a.published is not None]
         for a in self.assignments:
-            a.restore_published()
+            a.desired = baseline[a.offer.id]
         return changes
+
+    def adopt_published(self, offers: Sequence[PublishedOffer]) -> bool:
+        """Черновик, который уже лежит в Keitaro, считается опубликованным.
+
+        Так бывает, если Push в Keitaro прошёл, а сохранить это у нас не удалось (сбой БД,
+        параллельная правка): Fetch не должен предлагать «отменить» уже опубликованное.
+        """
+        if self.kind is not StreamKind.OFFERS or not self.draft_changes():
+            return False
+        ours = sorted((a.offer.id, a.desired.share) for a in self._rotation())
+        if not ours or ours != sorted((o.offer.id, o.share) for o in offers):
+            return False
+        self.mark_published()
+        return True
 
     def offers_to_publish(self) -> list[PublishedOffer]:
         """Что отправить в Keitaro при Push. Проверяет инварианты публикации (FR-2.12)."""
@@ -144,6 +171,38 @@ class Stream:
             a.mark_published()
 
     # ---------- внутреннее ----------
+
+    def _baseline(self) -> dict[OfferId, DesiredState]:
+        """Желаемое состояние опубликованных привязок на момент последнего Push.
+
+        Закреплённые — со своим закреплённым весом (Q7). Если он разошёлся с Keitaro,
+        остальные пересчитываются, чтобы сумма осталась 100.
+        """
+        published = [a for a in self._ordered() if a.published is not None]
+        baseline = {a.offer.id: a.published_desired() for a in published}
+        if any(a.published is not None and a.published.has_pin_drift for a in published):
+            rotation = [a.offer.id for a in published if baseline[a.offer.id].in_rotation]
+            shares = distribute_shares([Slot(i, baseline[i].share if baseline[i].pinned else None) for i in rotation])
+            for i in rotation:
+                baseline[i] = replace(baseline[i], share=shares[i])
+        return baseline
+
+    def _take_keitaro_shares(self) -> bool:
+        """Незакреплённым — веса из Keitaro, если раздача по составу та же, что в Keitaro,
+        и сумма сходится в 100. Иначе False — и вызывающий делает обычный пересчёт."""
+        if any(a.is_published and not a.desired.in_rotation for a in self.assignments):
+            return False
+        rotation = self._rotation()
+        shares: dict[OfferId, int] = {}
+        for a in rotation:
+            if not a.is_published or a.published is None:
+                return False
+            shares[a.offer.id] = a.desired.share if a.desired.pinned else a.published.share
+        if sum(shares.values()) != 100:
+            return False
+        for a in rotation:
+            a.desired = replace(a.desired, share=shares[a.offer.id])
+        return True
 
     def _rebalance(self) -> None:
         rotation = self._rotation()

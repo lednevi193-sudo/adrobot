@@ -53,6 +53,36 @@ def test_aggregate_survives_roundtrip_with_drafts(session_factory: sessionmaker[
     assert loaded.draft_changes() == campaign.draft_changes()
 
 
+def test_pinned_share_published_by_us_survives_roundtrip(session_factory: sessionmaker[Session]) -> None:
+    """Закреплённый вес последнего Push хранится отдельно от веса в Keitaro (Q7, FR-2.15)."""
+    campaign = make_campaign()
+    campaign.pin(OFFERS, A.id, 60)
+    campaign.mark_published(OFFERS)
+    keitaro = KeitaroStream(OFFERS, "Offers", 2, (PublishedOffer(A, 30), PublishedOffer(B, 70)))
+    campaign.stream(OFFERS).sync_from_keitaro(keitaro)  # вес поменяли руками в Keitaro
+
+    store(session_factory, campaign)
+    loaded = load(session_factory)
+
+    assert loaded == campaign
+    published = next(a.published for a in loaded.stream(OFFERS).assignments if a.offer.id == A.id)
+    assert published is not None and (published.share, published.pinned_share) == (30, 60)
+
+
+def test_old_document_without_pinned_share_loads(session_factory: sessionmaker[Session]) -> None:
+    store(session_factory, make_campaign())
+    with session_factory() as s:
+        s.execute(text("""
+            UPDATE campaigns SET streams = jsonb_set(
+                streams, '{streams,1,assignments,0,published}', '{"in_rotation": true, "share": 50, "pinned": false}'
+            ) WHERE id = :id
+        """), {"id": CID})
+        s.commit()
+
+    loaded = load(session_factory)
+    assert loaded.stream(OFFERS).assignments[0].published.pinned_share is None  # type: ignore[union-attr]
+
+
 def test_document_has_schema_version(session_factory: sessionmaker[Session]) -> None:
     store(session_factory, make_campaign())
     with session_factory() as s:

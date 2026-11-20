@@ -19,6 +19,7 @@ def settings() -> Settings:
         keitaro_url="https://keitaro.test",
         keitaro_api_key="test-key",
         database_url="postgresql+psycopg://unused",
+        campaign_prefix="test_x_",
     )
 
 

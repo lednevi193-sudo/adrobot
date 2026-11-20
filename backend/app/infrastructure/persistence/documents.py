@@ -26,6 +26,7 @@ class PublishedDoc(_Doc):
     in_rotation: bool
     share: int
     pinned: bool
+    pinned_share: int | None = None  # нет в документах до 2026-11-20 — тогда None
 
 
 class AssignmentDoc(_Doc):

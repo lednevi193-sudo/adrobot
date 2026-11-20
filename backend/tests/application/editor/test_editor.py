@@ -10,6 +10,7 @@ from app.application.editor.open_campaign import open_campaign
 from app.application.editor.push_stream import push_stream
 from app.application.errors import (
     CampaignNotFound,
+    ConcurrencyConflict,
     KeitaroError,
     NotOurCampaign,
     OfferNotFound,
@@ -187,3 +188,94 @@ def test_push_to_foreign_campaign_is_forbidden(world: World) -> None:
         push_stream(world.repo, world.keitaro, world.uow, cid, StreamId(1), prefix=PREFIX)
     assert "publish_offers" not in world.keitaro.calls
     assert campaign.streams == []
+
+
+# ---------- Push прошёл в Keitaro, а сохранить не удалось ----------
+
+
+def pin_other(world: World, c: Campaign, share: int) -> Campaign:
+    return edit_stream.pin(world.repo, world.uow, c.id, offers_stream(c), OTHER.id, share)
+
+
+def test_commit_failure_after_push_is_healed_by_fetch(
+    world: World, ours: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_other(world, ours)
+    pin_other(world, ours, 70)
+
+    def broken_commit() -> None:
+        raise RuntimeError("БД недоступна")
+
+    with monkeypatch.context() as m:
+        m.setattr(world.uow, "commit", broken_commit)
+        with pytest.raises(RuntimeError):
+            push(world, ours)
+    world.uow.rollback()  # конец запроса: несохранённое пропадает, как при закрытии Session
+    assert in_keitaro(world, ours) == {FLEXACIL.id: 30, OTHER.id: 70}  # Keitaro уже принял
+    assert world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
+
+    campaign = fetch_streams(world.repo, world.keitaro, world.uow, ours.id)  # без подтверждения
+
+    assert not campaign.has_draft
+    shares = {a.offer.id: (a.desired.share, a.desired.pinned) for a in campaign.stream(offers_stream(ours)).assignments}
+    assert shares == {FLEXACIL.id: (30, False), OTHER.id: (70, True)}  # закрепление не потеряно
+
+
+def test_concurrent_save_after_push_is_retried(world: World, ours: Campaign, monkeypatch: pytest.MonkeyPatch) -> None:
+    add_other(world, ours)
+    real_save = world.repo.save
+    attempts: list[int] = []
+
+    def save_conflicting_once(campaign: Campaign) -> None:
+        attempts.append(campaign.version)
+        if len(attempts) == 1:
+            raise ConcurrencyConflict(campaign.id)
+        real_save(campaign)
+
+    monkeypatch.setattr(world.repo, "save", save_conflicting_once)
+
+    campaign = push(world, ours)
+
+    assert len(attempts) == 2
+    assert not campaign.has_draft
+    assert not world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
+
+
+def test_concurrent_change_of_pushed_stream_is_reported(
+    world: World, ours: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_other(world, ours)
+    real_save = world.repo.save
+
+    def other_tab_wins(campaign: Campaign) -> None:
+        monkeypatch.setattr(world.repo, "save", real_save)
+        pin_other(world, ours, 80)  # другая вкладка успела изменить поток
+        raise ConcurrencyConflict(campaign.id)
+
+    monkeypatch.setattr(world.repo, "save", other_tab_wins)
+
+    with pytest.raises(ConcurrencyConflict):
+        push(world, ours)
+    assert world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
+
+
+# ---------- версия, которую видел пользователь (If-Match) ----------
+
+
+def test_stale_version_is_rejected(world: World, ours: Campaign) -> None:
+    seen = world.repo.get(ours.id).version  # type: ignore[union-attr]
+    add_other(world, ours)  # другая вкладка
+
+    with pytest.raises(ConcurrencyConflict):
+        edit_stream.cancel_stream(world.repo, world.uow, ours.id, offers_stream(ours), expected_version=seen)
+    with pytest.raises(ConcurrencyConflict):
+        fetch_streams(world.repo, world.keitaro, world.uow, ours.id, discard_drafts=True, expected_version=seen)
+    assert world.repo.get(ours.id).has_draft  # type: ignore[union-attr]
+
+
+def test_current_version_is_accepted(world: World, ours: Campaign) -> None:
+    campaign = add_other(world, ours)
+    cancelled = edit_stream.cancel_stream(
+        world.repo, world.uow, ours.id, offers_stream(ours), expected_version=campaign.version
+    )[1]
+    assert [c.offer.id for c in cancelled] == [FLEXACIL.id, OTHER.id]

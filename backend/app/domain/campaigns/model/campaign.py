@@ -4,6 +4,7 @@
 и сохраняются только целиком, через команды корня.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from app.domain.campaigns.model.draft import DraftChange
@@ -54,10 +55,16 @@ class Campaign:
 
         Если есть черновик, без явного discard_drafts бросает CampaignHasDrafts —
         UI показывает подтверждение со списком изменений и повторяет вызов (FR-2.3a).
+        Черновик, который уже лежит в Keitaro, черновиком не считается (Stream.adopt_published).
         """
-        if self.has_draft:
+        from_keitaro = {ks.id: ks for ks in snapshot.streams}
+        for s in self.streams:
+            if s.id in from_keitaro:
+                s.adopt_published(from_keitaro[s.id].offers)
+
+        if changes := self.draft_changes():
             if not discard_drafts:
-                raise CampaignHasDrafts(self.draft_changes())
+                raise CampaignHasDrafts(changes)
             self.cancel_all()
 
         self.name, self.alias, self.domain_url = snapshot.name, snapshot.alias, snapshot.domain_url
@@ -101,6 +108,9 @@ class Campaign:
 
     def mark_published(self, stream_id: StreamId) -> None:
         self.stream(stream_id).mark_published()
+
+    def adopt_published(self, stream_id: StreamId, offers: Sequence[PublishedOffer]) -> bool:
+        return self.stream(stream_id).adopt_published(offers)
 
     # ---------- чтение ----------
 

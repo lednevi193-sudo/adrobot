@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/config.py -> app -> backend -> корень репозитория
@@ -20,10 +20,22 @@ class Settings(BaseSettings):
 
     database_url: str = Field(repr=False)  # содержит пароль
 
-    campaign_prefix: str = ""
+    # Префикс «наших» кампаний на общем стенде (NFR-4, Q5). Обязателен: без него редактор
+    # не видит ни одной своей кампании, а создаватор плодил бы кампании без признака «наша».
+    campaign_prefix: str
     keitaro_domain_id: int = 1813
     keitaro_group_id: int = 10332
     keitaro_traffic_source_id: int = 836
+
+    @field_validator("campaign_prefix")
+    @classmethod
+    def _real_prefix(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("CAMPAIGN_PREFIX не задан: укажите префикс своих кампаний, например test_ivanov_")
+        if any(ch in value for ch in "<> "):
+            raise ValueError(f"CAMPAIGN_PREFIX={value!r} похож на плейсхолдер из .env.example: замените его своим")
+        return value
 
 
 @lru_cache

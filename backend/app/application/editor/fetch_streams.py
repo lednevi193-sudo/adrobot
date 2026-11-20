@@ -13,13 +13,14 @@ def fetch_streams(
     campaign_id: CampaignId,
     *,
     discard_drafts: bool = False,
+    expected_version: int | None = None,
 ) -> Campaign:
     """При черновике без discard_drafts — CampaignHasDrafts, ничего не сохраняется.
 
     UI показывает подтверждение со списком (campaign.draft_changes()) и повторяет вызов
     с discard_drafts=True.
     """
-    campaign = load_campaign(repo, campaign_id)
+    campaign = load_campaign(repo, campaign_id, expected_version)
     campaign.sync_from_keitaro(keitaro.get_campaign(campaign_id), discard_drafts=discard_drafts)
     repo.save(campaign)
     uow.commit()

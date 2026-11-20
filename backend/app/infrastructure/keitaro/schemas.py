@@ -6,6 +6,9 @@ extra="ignore": у Keitaro десятки полей (cookies_ttl, postbacks, �
 
 from pydantic import BaseModel, ConfigDict
 
+ACTIVE = "active"  # state потока/оффера: участвует в работе
+DELETED = "deleted"  # state потока: в архиве Keitaro
+
 
 class _KeitaroModel(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)

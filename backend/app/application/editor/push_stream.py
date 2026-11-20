@@ -1,13 +1,17 @@
 """Push (FR-2.13, FR-2.14): опубликовать черновик потока в Keitaro.
 
-Порядок — сначала Keitaro, потом наша БД. Если Keitaro принял, а наш commit упал,
-поток останется жёлтым, и ближайший Fetch выровняет его (закреплённые веса не потеряются, Q7).
+Порядок — сначала Keitaro, потом наша БД. Если Keitaro принял, а сохранить не удалось:
+- из-за параллельной правки (ConcurrencyConflict) — перечитываем кампанию и, если её черновик
+  потока совпадает с опубликованным, отмечаем его опубликованным в свежей версии;
+- из-за любого другого сбоя — ошибка уходит пользователю, а ближайший Fetch увидит, что
+  черновик уже лежит в Keitaro, и примет его как опубликованный (Stream.adopt_published),
+  не предлагая «отменить» и не теряя закреплённые веса.
 """
 
 from collections.abc import Sequence
 
 from app.application.editor.loading import load_campaign
-from app.application.errors import NotOurCampaign, PushNotConfirmed
+from app.application.errors import ConcurrencyConflict, NotOurCampaign, PushNotConfirmed
 from app.application.ports import CampaignRepository, KeitaroGateway, UnitOfWork
 from app.domain.campaigns import Campaign, KeitaroCampaign, PublishedOffer
 from app.domain.common.ids import CampaignId, StreamId
@@ -21,8 +25,9 @@ def push_stream(
     stream_id: StreamId,
     *,
     prefix: str,
+    expected_version: int | None = None,
 ) -> Campaign:
-    campaign = load_campaign(repo, campaign_id)
+    campaign = load_campaign(repo, campaign_id, expected_version)
     if not campaign.is_ours(prefix):
         raise NotOurCampaign(campaign_id)  # стенд общий: чужие потоки не публикуем (NFR-4)
 
@@ -34,8 +39,16 @@ def push_stream(
         raise PushNotConfirmed(stream_id, differences)
 
     campaign.mark_published(stream_id)
-    repo.save(campaign)
-    uow.commit()
+    try:
+        repo.save(campaign)
+        uow.commit()
+    except ConcurrencyConflict:
+        uow.rollback()
+        campaign = load_campaign(repo, campaign_id)
+        if not campaign.adopt_published(stream_id, offers):
+            raise  # поток успели изменить после Push — пусть пользователь посмотрит свежую версию
+        repo.save(campaign)
+        uow.commit()
     return campaign
 
 

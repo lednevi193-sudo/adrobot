@@ -8,7 +8,7 @@ FastAPI кеширует зависимость в пределах запрос
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.application.ports import CampaignRepository, KeitaroGateway, UnitOfWork
@@ -36,7 +36,21 @@ def get_prefix() -> str:
     return get_settings().campaign_prefix
 
 
+def get_expected_version(
+    if_match: Annotated[str | None, Header(description="Версия кампании (поле version), которую видел пользователь")] = None,
+) -> int | None:
+    """If-Match: 3 или ETag-форма "3" / W/"3". Без заголовка — без проверки версии."""
+    if if_match is None:
+        return None
+    raw = if_match.strip().removeprefix("W/").strip('"')
+    try:
+        return int(raw)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"If-Match должен быть версией кампании, а не {if_match!r}")
+
+
 Repo = Annotated[CampaignRepository, Depends(get_repository)]
 Uow = Annotated[UnitOfWork, Depends(get_unit_of_work)]
 Keitaro = Annotated[KeitaroGateway, Depends(get_keitaro)]
 Prefix = Annotated[str, Depends(get_prefix)]
+ExpectedVersion = Annotated[int | None, Depends(get_expected_version)]

@@ -43,8 +43,13 @@ def merge_published(
 
         a.offer = ko.offer  # обновить снимок имени
         if a.desired.in_rotation and a.desired.pinned:
-            was_pinned = a.published.pinned if a.is_published else False
-            a.published = PublishedState(True, ko.share, was_pinned)
+            # закреплённый вес Keitaro не перетирает (Q7); помним, какой вес закрепляли при Push,
+            # чтобы повторный Fetch или Cancel вернули его, а не вес из Keitaro (FR-2.15)
+            prev = a.published if a.is_published else None
+            if prev is not None and prev.pinned:
+                a.published = PublishedState(True, ko.share, True, prev.intended_share)
+            else:
+                a.published = PublishedState(True, ko.share)
             needs_rebalance |= a.desired.share != ko.share
         else:
             a.published = PublishedState(True, ko.share)

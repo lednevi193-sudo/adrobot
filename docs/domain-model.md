@@ -92,7 +92,8 @@ Campaign (корень)
 
 ```
 desired:   DesiredState(in_rotation, share, pinned)   — что видит пользователь в обёртке
-published: PublishedState(in_rotation, share, pinned) — что лежит в Keitaro
+published: PublishedState(in_rotation, share, pinned, pinned_share) — что лежит в Keitaro;
+           pinned_share — закреплённый вес последнего Push (может разойтись с share, FR-2.9a)
            или None — привязка ни разу не публиковалась
 ```
 
@@ -220,7 +221,7 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 - **Схема** — миграции Alembic (`backend/migrations`), первая создаёт `campaigns`. Применить: `alembic upgrade head`.
 - **Документ** описан Pydantic-моделями (`infrastructure/persistence/documents.py`) и валидируется при чтении; `schema_version` — для будущих изменений формата.
 - **Оптимистическая блокировка** — две линии защиты:
-  1. версия агрегата, прочитанная раньше, не совпадает с версией строки → `ConcurrencyConflict` сразу;
+  1. версия, которую видел пользователь (`If-Match`), не совпадает с версией строки → `ConcurrencyConflict` сразу (`load_campaign`);
   2. два запроса прочитали одну версию одновременно → `UPDATE … WHERE version = :прочитанная` второго затрагивает 0 строк → `StaleDataError` → `ConcurrencyConflict`.
 - **Транзакция** — граница сценария приложения: репозиторий делает `flush` (чтобы ошибки всплывали в нём), `commit` — сценарий.
 - **Интеграционные тесты** (`tests/infrastructure`) идут на отдельной БД `adrobot_test` в том же контейнере, схема создаётся теми же миграциями; без запущенного Postgres тесты пропускаются.
@@ -234,7 +235,7 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
      "assignments": [
        {"offer_id": 18813, "offer_name": "Flexacil …", "order": 1,
         "desired":   {"in_rotation": true, "share": 50, "pinned": true},
-        "published": {"in_rotation": true, "share": 34, "pinned": false}}
+        "published": {"in_rotation": true, "share": 34, "pinned": false, "pinned_share": null}}
      ]}
   ]
 }
@@ -264,7 +265,7 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 - гео-поток: `type=forced`, `schema=redirect`, фильтр `country/accept`; поток офферов: `type=regular`, `schema=landings`, `offers[{offer_id, share, state}]`;
 - Push — `PUT /streams/{id}` только с полем `offers`: по документации PUT меняет лишь переданные поля.
 
-**Не подтверждено документацией** (проверить на своей кампании, шаг 8): заменяет ли `offers` в PUT список целиком, то есть удаляются ли неперечисленные офферы. До проверки страхует сверка после Push (FR-2.13, п. 3).
+`offers` в PUT заменяет список потока целиком, поэтому выключенные в Keitaro офферы (их обёртка не показывает) шлюз перед PUT читает из `GET /streams/{id}` и отправляет обратно с исходными `state` и `share` — Push их не удаляет. Сверка после Push (FR-2.13, п. 3) дополнительно страхует от расхождений.
 
 **Сознательно не делаем:** повторы запросов (POST не идемпотентен, а повтор PUT с весами оставим пользователю — кнопка Push), кеш справочника офферов (один запрос на Fetch).
 
@@ -286,7 +287,10 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 
 **Решения:**
 - **Создание — сага с компенсацией.** Распределённой транзакции между Keitaro и Postgres нет. Любой сбой после создания кампании (поток, повторное чтение, наша БД) → `rollback` + перенос кампании в архив Keitaro → `CampaignCreationFailed`. Если и компенсация не удалась — сообщение просит удалить кампанию вручную.
-- **Push — сначала Keitaro, потом БД.** Keitaro принял, а наш commit упал → поток остаётся жёлтым, ближайший Fetch выровняет его, закреплённые веса сохранятся (Q7).
+- **Push — сначала Keitaro, потом БД.** Keitaro принял, а сохранить не удалось:
+  - `ConcurrencyConflict` (параллельная правка) → сценарий перечитывает кампанию и, если черновик потока совпадает с опубликованным, отмечает его опубликованным в свежей версии; иначе ошибка уходит пользователю;
+  - любой другой сбой → ошибка уходит пользователю, а ближайший Fetch видит, что черновик уже лежит в Keitaro, и принимает его как опубликованный (`Stream.adopt_published`) без подтверждения и без потери закреплений (Q7).
+- **Жёлтый поток ≠ черновик.** `has_draft` — желаемое расходится с Keitaro; `draft_changes()` — только то, что отменит Cancel. Разница — закреплённый вес, который поменяли руками в Keitaro (FR-2.9a): Cancel и Fetch его не трогают, решают Push или Unpin (Unpin в этом случае принимает веса из Keitaro).
 - **Сверка после Push (FR-2.13 п. 3)** не сошлась → `PushNotConfirmed` со списком расхождений, черновик не трогаем, поток жёлтый.
 - **Push только в наши кампании** (`NotOurCampaign`): стенд общий (NFR-4). Чужие кампании можно открыть, синхронизировать и редактировать черновиком, но не публиковать. Без `CAMPAIGN_PREFIX` «наших» нет вовсе.
 - Команды редактора Keitaro не трогают и проверку «наша ли» не делают: черновик безвреден.
@@ -309,6 +313,9 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | `POST …/offers/{oid}/bring-back` | Bring back |
 | `PUT` / `DELETE …/offers/{oid}/pin` | Pin / Unpin |
 | `POST …/streams/{sid}/cancel`, `POST …/streams/{sid}/push` | Cancel, Push |
+| `GET /health` | приложение живо и видит БД (503, если нет) |
+
+`CampaignView.version` — версия кампании. Fetch и все команды редактора принимают её в заголовке `If-Match` (необязательно): версия устарела → 409 `concurrency_conflict`. Так подтверждение Cancel и Fetch с `discard_drafts` отбрасывает ровно тот черновик, который пользователь видел (FR-2.3a, FR-2.10a).
 
 `StreamView.push_blocker` — сообщение правила FR-2.12, если Push сейчас невозможен (считается тем же `offers_to_publish`, фронт правила не дублирует). `StreamOfferView.keitaro_share` — вес в Keitaro для подсказки FR-2.9a.
 
@@ -321,5 +328,6 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | `NotOurCampaign` | 403 |
 | `KeitaroError`, `CampaignCreationFailed`, `PushNotConfirmed` (+ `differences`) | 502 |
 | `KeitaroUnavailable` | 504 |
+| прочие `ApplicationError` | 500 |
 
 Эндпоинты — обычные `def`: FastAPI выполняет их в пуле потоков, синхронные SQLAlchemy и httpx на время I/O отпускают GIL. Тесты (`tests/api`) — `TestClient` с `app.dependency_overrides` на фейки (≈ `WebApplicationFactory`).

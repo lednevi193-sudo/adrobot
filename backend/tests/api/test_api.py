@@ -165,3 +165,23 @@ def test_keitaro_down_is_504(client: TestClient, world: World, monkeypatch: pyte
 
     monkeypatch.setattr(world.keitaro, "list_active_offers", down)
     assert client.get("/api/offers").status_code == 504
+
+
+# ---------- If-Match: версия кампании ----------
+
+
+def test_view_carries_version_and_stale_if_match_is_409(client: TestClient, created: dict) -> None:
+    stale = created["version"]
+    fresh = client.post(url(created, "/offers"), json={"offer_id": OTHER.id}).json()
+    assert fresh["version"] > stale
+
+    r = client.post(url(created, "/cancel"), headers={"If-Match": f'"{stale}"'})
+    assert r.status_code == 409 and r.json()["code"] == "concurrency_conflict"
+
+    r = client.post(url(created, "/cancel"), headers={"If-Match": str(fresh["version"])})
+    assert r.status_code == 200
+
+
+def test_malformed_if_match_is_400(client: TestClient, created: dict) -> None:
+    r = client.post(url(created, "/cancel"), headers={"If-Match": "abc"})
+    assert r.status_code == 400

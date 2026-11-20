@@ -55,7 +55,9 @@ def _assignment_doc(a: OfferAssignment) -> AssignmentDoc:
         offer_name=a.offer.name,
         order=a.order,
         desired=DesiredDoc(in_rotation=a.desired.in_rotation, share=a.desired.share, pinned=a.desired.pinned),
-        published=None if p is None else PublishedDoc(in_rotation=p.in_rotation, share=p.share, pinned=p.pinned),
+        published=None
+        if p is None
+        else PublishedDoc(in_rotation=p.in_rotation, share=p.share, pinned=p.pinned, pinned_share=p.pinned_share),
     )
 
 
@@ -90,5 +92,5 @@ def _assignment(d: AssignmentDoc) -> OfferAssignment:
         offer=OfferRef(OfferId(d.offer_id), d.offer_name),
         order=d.order,
         desired=DesiredState(d.desired.in_rotation, d.desired.share, d.desired.pinned),
-        published=None if p is None else PublishedState(p.in_rotation, p.share, p.pinned),
+        published=None if p is None else PublishedState(p.in_rotation, p.share, p.pinned, p.pinned_share),
     )

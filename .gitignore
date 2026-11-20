@@ -16,3 +16,4 @@ dist/
 .idea/
 .vscode/
 .claude/
+.claude/reviews/

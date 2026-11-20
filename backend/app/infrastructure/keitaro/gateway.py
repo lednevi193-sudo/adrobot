@@ -91,7 +91,11 @@ class HttpKeitaroGateway:
     # ---------- редактор ----------
 
     def publish_offers(self, stream_id: StreamId, offers: Sequence[PublishedOffer]) -> None:
-        self._client.put(f"/streams/{stream_id}", to_keitaro.stream_offers_body(offers))
+        """PUT заменяет offers[] целиком. Выключенные в Keitaro офферы обёртка не показывает
+        и не трогает — их читаем прямо перед PUT и отправляем обратно как есть, иначе Push
+        молча удалил бы их из потока."""
+        current = _parse(KeitaroStreamJson, self._client.get(f"/streams/{stream_id}"))
+        self._client.put(f"/streams/{stream_id}", to_keitaro.stream_offers_body(offers, current.offers))
 
     # ---------- внутреннее ----------
 

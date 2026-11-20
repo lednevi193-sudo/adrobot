@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from app.domain.campaigns import GeoRedirectStreamSpec, OffersStreamSpec, PublishedOffer
 from app.domain.common.ids import CampaignId
+from app.infrastructure.keitaro.schemas import ACTIVE, KeitaroStreamOfferJson
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +61,22 @@ def offers_stream_body(campaign_id: CampaignId, spec: OffersStreamSpec) -> dict:
     }
 
 
-def stream_offers_body(offers: Sequence[PublishedOffer]) -> dict:
-    """PUT /streams/{id} меняет только переданные поля (документация Keitaro)."""
-    return {"offers": offers_payload(offers)}
+def stream_offers_body(
+    offers: Sequence[PublishedOffer], current: Sequence[KeitaroStreamOfferJson] = ()
+) -> dict:
+    """PUT /streams/{id} меняет только переданные поля (документация Keitaro), но offers[] — целиком.
+
+    current — то, что сейчас лежит в потоке Keitaro: неактивные офферы оттуда сохраняются
+    с исходными state и share. Если такой оффер есть среди публикуемых, побеждает публикуемый.
+    """
+    sent = {o.offer.id for o in offers}
+    kept = [
+        {"offer_id": o.offer_id, "share": o.share, "state": o.state}
+        for o in current
+        if o.state != ACTIVE and o.offer_id not in sent
+    ]
+    return {"offers": offers_payload(offers) + kept}
 
 
 def offers_payload(offers: Sequence[PublishedOffer]) -> list[dict]:
-    return [{"offer_id": o.offer.id, "share": o.share, "state": "active"} for o in offers]
+    return [{"offer_id": o.offer.id, "share": o.share, "state": ACTIVE} for o in offers]

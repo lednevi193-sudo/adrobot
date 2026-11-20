@@ -22,6 +22,7 @@ def campaign_view(c: Campaign, prefix: str) -> CampaignView:
         tracker_url=c.tracker_url,
         is_ours=c.is_ours(prefix),
         has_draft=c.has_draft,
+        version=c.version,
         streams=[stream_view(s) for s in c.streams],
     )
 

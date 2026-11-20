@@ -136,6 +136,7 @@ def test_delete_campaign() -> None:
 
 def test_publish_offers_sends_only_offers_field() -> None:
     stub = KeitaroStub()
+    stub.on("GET", "/streams/1332012", {**OFFERS_STREAM, "offers": []})
     stub.on("PUT", "/streams/1332012", OFFERS_STREAM)
 
     stub.gateway().publish_offers(
@@ -146,5 +147,38 @@ def test_publish_offers_sends_only_offers_field() -> None:
         "offers": [
             {"offer_id": 18813, "share": 50, "state": "active"},
             {"offer_id": 25327, "share": 50, "state": "active"},
+        ]
+    }
+
+
+def test_publish_offers_keeps_disabled_offers_of_keitaro() -> None:
+    """Выключенный в Keitaro оффер обёртка не видит, но PUT заменяет offers[] целиком —
+    его нужно отправить обратно, иначе Push молча удалит его из потока."""
+    stub = KeitaroStub()
+    stub.on("GET", "/streams/1332012", OFFERS_STREAM)
+    stub.on("PUT", "/streams/1332012", OFFERS_STREAM)
+
+    stub.gateway().publish_offers(StreamId(1332012), [PublishedOffer(FLEXACIL, 100)])
+
+    assert stub.body() == {
+        "offers": [
+            {"offer_id": 18813, "share": 100, "state": "active"},
+            {"offer_id": 17210, "share": 0, "state": "disabled"},
+        ]
+    }
+
+
+def test_published_offer_wins_over_its_disabled_copy() -> None:
+    stub = KeitaroStub()
+    stub.on("GET", "/streams/1332012", OFFERS_STREAM)
+    stub.on("PUT", "/streams/1332012", OFFERS_STREAM)
+
+    disabled = OfferRef(OfferId(17210), "")
+    stub.gateway().publish_offers(StreamId(1332012), [PublishedOffer(FLEXACIL, 50), PublishedOffer(disabled, 50)])
+
+    assert stub.body() == {
+        "offers": [
+            {"offer_id": 18813, "share": 50, "state": "active"},
+            {"offer_id": 17210, "share": 50, "state": "active"},
         ]
     }

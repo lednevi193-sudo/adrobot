@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter
 
-from app.api.dependencies import Keitaro, Prefix, Repo, Uow
+from app.api.dependencies import ExpectedVersion, Keitaro, Prefix, Repo, Uow
 from app.api.presenters import campaign_view, change_dtos
 from app.api.schemas import AddOfferRequest, CampaignView, CancelResponse, DraftChangeDto, ErrorResponse, PinRequest
 from app.application.editor import edit_stream
@@ -27,43 +27,66 @@ def draft(campaign_id: int, stream_id: int, repo: Repo) -> list[DraftChangeDto]:
 
 @router.post("/offers", responses={404: {"model": ErrorResponse}, 422: {"model": ErrorResponse}})
 def add_offer(
-    campaign_id: int, stream_id: int, body: AddOfferRequest, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix
+    campaign_id: int,
+    stream_id: int,
+    body: AddOfferRequest,
+    repo: Repo,
+    keitaro: Keitaro,
+    uow: Uow,
+    prefix: Prefix,
+    version: ExpectedVersion,
 ) -> CampaignView:
-    campaign = edit_stream.add_offer(
-        repo, keitaro, uow, CampaignId(campaign_id), StreamId(stream_id), OfferId(body.offer_id)
-    )
-    return campaign_view(campaign, prefix)
+    ids = CampaignId(campaign_id), StreamId(stream_id), OfferId(body.offer_id)
+    return campaign_view(edit_stream.add_offer(repo, keitaro, uow, *ids, expected_version=version), prefix)
 
 
 @router.delete(OFFER)
-def remove_offer(campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix) -> CampaignView:
+def remove_offer(
+    campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix, version: ExpectedVersion
+) -> CampaignView:
     ids = CampaignId(campaign_id), StreamId(stream_id), OfferId(offer_id)
-    return campaign_view(edit_stream.remove_offer(repo, uow, *ids), prefix)
+    return campaign_view(edit_stream.remove_offer(repo, uow, *ids, expected_version=version), prefix)
 
 
 @router.post(OFFER + "/bring-back")
-def bring_back(campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix) -> CampaignView:
+def bring_back(
+    campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix, version: ExpectedVersion
+) -> CampaignView:
     ids = CampaignId(campaign_id), StreamId(stream_id), OfferId(offer_id)
-    return campaign_view(edit_stream.bring_back(repo, uow, *ids), prefix)
+    return campaign_view(edit_stream.bring_back(repo, uow, *ids, expected_version=version), prefix)
 
 
 @router.put(OFFER + "/pin")
 def pin(
-    campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix, body: PinRequest | None = None
+    campaign_id: int,
+    stream_id: int,
+    offer_id: int,
+    repo: Repo,
+    uow: Uow,
+    prefix: Prefix,
+    version: ExpectedVersion,
+    body: PinRequest | None = None,
 ) -> CampaignView:
     ids = CampaignId(campaign_id), StreamId(stream_id), OfferId(offer_id)
-    return campaign_view(edit_stream.pin(repo, uow, *ids, body.share if body else None), prefix)
+    share = body.share if body else None
+    return campaign_view(edit_stream.pin(repo, uow, *ids, share, expected_version=version), prefix)
 
 
 @router.delete(OFFER + "/pin")
-def unpin(campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix) -> CampaignView:
+def unpin(
+    campaign_id: int, stream_id: int, offer_id: int, repo: Repo, uow: Uow, prefix: Prefix, version: ExpectedVersion
+) -> CampaignView:
     ids = CampaignId(campaign_id), StreamId(stream_id), OfferId(offer_id)
-    return campaign_view(edit_stream.unpin(repo, uow, *ids), prefix)
+    return campaign_view(edit_stream.unpin(repo, uow, *ids, expected_version=version), prefix)
 
 
 @router.post("/cancel")
-def cancel(campaign_id: int, stream_id: int, repo: Repo, uow: Uow, prefix: Prefix) -> CancelResponse:
-    campaign, cancelled = edit_stream.cancel_stream(repo, uow, CampaignId(campaign_id), StreamId(stream_id))
+def cancel(
+    campaign_id: int, stream_id: int, repo: Repo, uow: Uow, prefix: Prefix, version: ExpectedVersion
+) -> CancelResponse:
+    """С If-Match отменяется ровно тот черновик, который был в подтверждении (FR-2.10a)."""
+    ids = CampaignId(campaign_id), StreamId(stream_id)
+    campaign, cancelled = edit_stream.cancel_stream(repo, uow, *ids, expected_version=version)
     return CancelResponse(campaign=campaign_view(campaign, prefix), cancelled=change_dtos(stream_id, cancelled))
 
 
@@ -71,6 +94,9 @@ def cancel(campaign_id: int, stream_id: int, repo: Repo, uow: Uow, prefix: Prefi
     "/push",
     responses={403: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
 )
-def push(campaign_id: int, stream_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix) -> CampaignView:
-    campaign = push_stream(repo, keitaro, uow, CampaignId(campaign_id), StreamId(stream_id), prefix=prefix)
+def push(
+    campaign_id: int, stream_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix, version: ExpectedVersion
+) -> CampaignView:
+    ids = CampaignId(campaign_id), StreamId(stream_id)
+    campaign = push_stream(repo, keitaro, uow, *ids, prefix=prefix, expected_version=version)
     return campaign_view(campaign, prefix)

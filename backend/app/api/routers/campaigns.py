@@ -6,7 +6,7 @@ SQLAlchemy и httpx на время ожидания I/O отпускают GIL.
 
 from fastapi import APIRouter, status
 
-from app.api.dependencies import Keitaro, Prefix, Repo, Uow
+from app.api.dependencies import ExpectedVersion, Keitaro, Prefix, Repo, Uow
 from app.api.presenters import campaign_view
 from app.api.schemas import CampaignSummaryDto, CampaignView, CreateCampaignRequest, ErrorResponse, FetchRequest
 from app.application.creator.create_campaign import create_campaign
@@ -45,8 +45,20 @@ def open_(campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Pref
 
 @router.post("/{campaign_id}/fetch", responses={409: {"model": ErrorResponse}})
 def fetch(
-    campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix, body: FetchRequest | None = None
+    campaign_id: int,
+    repo: Repo,
+    keitaro: Keitaro,
+    uow: Uow,
+    prefix: Prefix,
+    version: ExpectedVersion,
+    body: FetchRequest | None = None,
 ) -> CampaignView:
-    """409 campaign_has_drafts с полем changes — показать подтверждение и повторить с discard_drafts=true."""
+    """409 campaign_has_drafts с полем changes — показать подтверждение и повторить с discard_drafts=true.
+
+    С If-Match отбрасывается ровно тот черновик, который был в подтверждении (FR-2.3a).
+    """
     discard = body.discard_drafts if body else False
-    return campaign_view(fetch_streams(repo, keitaro, uow, CampaignId(campaign_id), discard_drafts=discard), prefix)
+    campaign = fetch_streams(
+        repo, keitaro, uow, CampaignId(campaign_id), discard_drafts=discard, expected_version=version
+    )
+    return campaign_view(campaign, prefix)
