@@ -323,3 +323,27 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | `KeitaroUnavailable` | 504 |
 
 Эндпоинты — обычные `def`: FastAPI выполняет их в пуле потоков, синхронные SQLAlchemy и httpx на время I/O отпускают GIL. Тесты (`tests/api`) — `TestClient` с `app.dependency_overrides` на фейки (≈ `WebApplicationFactory`).
+
+## 12. Фронтенд
+
+Vue 3 + TypeScript + Naive UI, сборка Vite (`frontend/`). Фронт — тонкий клиент HTTP API из раздела 11: правил домена (веса, состояния, «жёлтый ли поток», `push_blocker`) в нём нет, он только показывает присланный `CampaignView`.
+
+```
+frontend/src/
+  shared/api/   http.ts (единственный fetch, ≈ typed HttpClient), apiError.ts (ApiError{status, code, message, body}), errorTitle.ts
+  shared/ui/    ErrorAlert — заголовок по статусу, message бэкенда, differences после Push
+  offers/       OfferPicker — автодополнение «[id] name» для создаватора и Add offer
+  creator/      CreatorPage, fieldErrors (code -> поле формы)
+  editor/       api/ (DTO 1:1 со schemas.py, клиенты), useCampaignEditor, list/, page/, stream/, draft/
+frontend/tests/ повторяет src/
+```
+
+| Решение | Почему |
+|---|---|
+| Состояние редактора — composable `useCampaignEditor` (≈ scoped-сервис страницы), без глобального store | Источник истины — сервер: каждая команда возвращает `CampaignView`, composable кладёт его в один `ref` |
+| DTO описаны вручную в `editor/api/types.ts` | Контракт маленький; генератор (≈ NSwag) не окупается |
+| Ошибка API — `ApiError` с `code` из тела | Логика фронта ветвится по `code` (`campaign_has_drafts`, `invalid_geo`…), текст для пользователя — `message` бэкенда |
+| Fetch при черновике: 409 → окно со списком `changes` → повтор с `discard_drafts: true` | FR-2.3a; то же окно (`ConfirmDiscardModal`) — для Cancel по `GET …/draft` (FR-2.10a) |
+| Маршруты `/campaigns`, `/campaigns/:id`, `/create` | Список — часть редактора (FR-2.1), как `list_campaigns` в `application/editor` |
+
+**Запуск.** Разработка: бэкенд на :8000 и `npm --prefix frontend run dev` (Vite на :5173 проксирует `/api` на FastAPI). Прод: `npm --prefix frontend run build`, и `frontend/dist` раздаёт сам FastAPI (`app/spa.py`, ≈ `UseStaticFiles` + `MapFallbackToFile`): файл из `dist` или `index.html` для маршрутов SPA; `/api/*` и `/docs` не перехватываются. Тесты — `npm --prefix frontend test` (Vitest + Vue Test Utils, jsdom).
