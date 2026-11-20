@@ -165,7 +165,7 @@ app/
 │   ├── editor/                     list, open, fetch, edit (команды), push
 │   └── errors.py                   ConcurrencyConflict, CampaignNotFound, KeitaroError, …
 ├── infrastructure/
-│   ├── db.py                       engine, сессии
+│   ├── db.py                       engine, сессии (ленивые: импорт без .env)
 │   ├── keitaro/                    ACL к Keitaro (раздел 9)
 │   │   ├── client.py               транспорт: заголовки, таймаут, ошибки -> KeitaroError
 │   │   ├── schemas.py              форма ответов Keitaro (Pydantic, только нужные поля)
