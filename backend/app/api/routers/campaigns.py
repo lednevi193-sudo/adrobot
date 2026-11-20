@@ -8,7 +8,14 @@ from fastapi import APIRouter, status
 
 from app.api.dependencies import Keitaro, Prefix, Repo, Uow
 from app.api.presenters import campaign_view
-from app.api.schemas import CampaignSummaryDto, CampaignView, CreateCampaignRequest, ErrorResponse, FetchRequest
+from app.api.schemas import (
+    CampaignSummaryDto,
+    CampaignView,
+    CreateCampaignRequest,
+    ErrorResponse,
+    FetchRequest,
+    OpenCampaignResponse,
+)
 from app.application.creator.create_campaign import create_campaign
 from app.application.editor.fetch_streams import fetch_streams
 from app.application.editor.list_campaigns import list_campaigns
@@ -19,10 +26,11 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 
 @router.get("")
-def list_(keitaro: Keitaro, prefix: Prefix, all: bool = False) -> list[CampaignSummaryDto]:
+def list_(repo: Repo, keitaro: Keitaro, prefix: Prefix, all: bool = False) -> list[CampaignSummaryDto]:
+    """all=false — наши из БД обёртки (без Keitaro); all=true — все кампании стенда из Keitaro."""
     return [
         CampaignSummaryDto(id=c.id, name=c.name)
-        for c in list_campaigns(keitaro, prefix=prefix, only_ours=not all)
+        for c in list_campaigns(repo, keitaro, prefix=prefix, only_ours=not all)
     ]
 
 
@@ -39,8 +47,10 @@ def create(body: CreateCampaignRequest, repo: Repo, keitaro: Keitaro, uow: Uow, 
 
 
 @router.get("/{campaign_id}", responses={404: {"model": ErrorResponse}})
-def open_(campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix) -> CampaignView:
-    return campaign_view(open_campaign(repo, keitaro, uow, CampaignId(campaign_id)), prefix)
+def open_(campaign_id: int, repo: Repo, keitaro: Keitaro, uow: Uow, prefix: Prefix) -> OpenCampaignResponse:
+    """Сверяет кампанию с Keitaro; при черновике не трогает её, а возвращает keitaro_changes."""
+    opened = open_campaign(repo, keitaro, uow, CampaignId(campaign_id))
+    return OpenCampaignResponse(campaign=campaign_view(opened.campaign, prefix), keitaro_changes=opened.keitaro_changes)
 
 
 @router.post("/{campaign_id}/fetch", responses={409: {"model": ErrorResponse}})

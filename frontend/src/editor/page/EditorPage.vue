@@ -12,10 +12,11 @@ import OtherStreamCard from '../stream/OtherStreamCard.vue'
 import StreamCard from '../stream/StreamCard.vue'
 import { useCampaignEditor } from '../useCampaignEditor'
 import CampaignHeader from './CampaignHeader.vue'
+import KeitaroChangesAlert from './KeitaroChangesAlert.vue'
 
 const props = defineProps<{ id: number }>()
 const editor = useCampaignEditor(props.id)
-const { campaign, streams, lastError, busy, stream: cmd } = editor
+const { campaign, streams, keitaroChanges, lastError, busy, stream: cmd } = editor
 const message = useMessage()
 
 onMounted(editor.load)
@@ -75,6 +76,7 @@ const showCancelConfirm = modalShow(cancelConfirm)
 
     <template v-if="campaign">
       <CampaignHeader :campaign="campaign" :fetching="busy === 'fetch'" @fetch="onFetch" />
+      <KeitaroChangesAlert v-if="keitaroChanges.length" :changes="keitaroChanges" />
 
       <template v-for="s in streams" :key="s.id">
         <StreamCard

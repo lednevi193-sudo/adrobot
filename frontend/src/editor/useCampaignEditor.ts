@@ -54,7 +54,16 @@ export function useCampaignEditor(campaignId: number) {
 
   const ref_ = (streamId: number): StreamRef => ({ campaignId, streamId })
 
-  const load = () => apply('open', null, () => openCampaign(campaignId))
+  /** Изменения в Keitaro, которые не подтянуты из-за черновика. Fetch их подтягивает — и список пустеет. */
+  const keitaroChanges = ref<string[]>([])
+
+  async function load(): Promise<boolean> {
+    const opened = await run('open', null, () => openCampaign(campaignId))
+    if (!opened) return false
+    campaign.value = opened.campaign
+    keitaroChanges.value = opened.keitaro_changes
+    return true
+  }
 
   /** Fetch streams. При черновике бэкенд отвечает 409 со списком changes — его отдаём странице. */
   async function fetchStreams(discardDrafts = false): Promise<FetchOutcome> {
@@ -62,6 +71,7 @@ export function useCampaignEditor(campaignId: number) {
     lastError.value = null
     try {
       campaign.value = await fetchStreamsApi(campaignId, discardDrafts)
+      keitaroChanges.value = []
       return { kind: 'done' }
     } catch (e) {
       const error = asApiError(e)
@@ -90,7 +100,7 @@ export function useCampaignEditor(campaignId: number) {
 
   const clearError = () => (lastError.value = null)
 
-  return { campaign, streams, lastError, busy, load, fetchStreams, stream, clearError }
+  return { campaign, streams, keitaroChanges, lastError, busy, load, fetchStreams, stream, clearError }
 }
 
 export type CampaignEditor = ReturnType<typeof useCampaignEditor>

@@ -60,6 +60,13 @@ export interface DraftChangeDto {
   share_after: number | null
 }
 
+/** Открытие кампании: сверено с Keitaro (FR-2.1). */
+export interface OpenCampaignResponse {
+  campaign: CampaignView
+  /** Что поменяли прямо в Keitaro, пока в обёртке лежит черновик; пусто — синхронизировано. */
+  keitaro_changes: string[]
+}
+
 export interface CancelResponse {
   campaign: CampaignView
   cancelled: DraftChangeDto[]

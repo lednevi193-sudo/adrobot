@@ -43,7 +43,15 @@ watch(all, load)
   <n-space vertical>
     <n-card size="small" title="Открыть по ID">
       <n-space>
-        <n-input-number v-model:value="openId" :min="1" :precision="0" placeholder="ID кампании" data-test="open-id" />
+        <n-input-number
+          v-model:value="openId"
+          :min="1"
+          :precision="0"
+          :show-button="false"
+          placeholder="ID кампании"
+          data-test="open-id"
+          @keyup.enter="openById"
+        />
         <n-button type="primary" :disabled="openId === null" data-test="open" @click="openById">Открыть</n-button>
       </n-space>
     </n-card>
@@ -71,7 +79,7 @@ watch(all, load)
             </tr>
             <tr v-if="!loading && !campaigns.length">
               <td colspan="2" class="empty">
-                {{ all ? 'Кампаний нет' : 'Наших кампаний пока нет — создайте первую' }}
+                {{ all ? 'Кампаний нет' : 'Наших кампаний в обёртке пока нет — создайте или откройте по ID' }}
               </td>
             </tr>
           </tbody>

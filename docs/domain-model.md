@@ -47,6 +47,7 @@
 | `KeitaroCampaign`, `KeitaroStream` | «Что сейчас в Keitaro». Keitaro — часть языка пользователя («в Keitaro сейчас 30%»), поэтому имя внешней системы здесь уместно |
 | `PublishedOffer` | Строка раздачи потока в Keitaro: оффер и его вес |
 | `merge_published` | Таблица FR-2.3: что происходит с оффером, который пропал из Keitaro, появился в нём и т. д. |
+| `changes_in_keitaro` | «Что поменяли прямо в Keitaro» относительно опубликованного (черновик не в счёт) — предупреждение при открытии кампании с черновиком |
 
 ### `campaigns/creation` — создаватор
 
@@ -278,8 +279,8 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 |---|---|
 | `create_campaign` | оффер из Keitaro, `CampaignBlueprint` (ошибки формы — до Keitaro) → кампания → 2 потока → снимок → `repo.add` → commit |
 | `search_offers` | активные офферы, по ID и подстроке названия, не больше 20 |
-| `list_campaigns` | список из Keitaro, по умолчанию только наши (`is_our_name`), новые первыми |
-| `open_campaign` | из БД; впервые — из Keitaro с сохранением; гонка двух открытий — берём уже сохранённую |
+| `list_campaigns` | наши (`is_our_name`) — из нашей БД без обращения к Keitaro; все — из Keitaro; новые первыми. Наша кампания, созданная прямо в Keitaro, попадает в список после первого открытия по ID |
+| `open_campaign` | впервые — импорт из Keitaro (гонка двух открытий — берём уже сохранённую). Дальше каждое открытие сверяется с Keitaro (`changes_in_keitaro`): без черновика — синхронизация как Fetch, запись в БД только при изменениях; с черновиком — кампания не трогается, список изменений уходит пользователю (`keitaro_changes`); удалённая в Keitaro — показываем то, что знаем |
 | `fetch_streams` | снимок Keitaro → `sync_from_keitaro(discard_drafts)` → save. При черновике без подтверждения — `CampaignHasDrafts`, ничего не сохраняется |
 | `edit_stream.*` | add (имя оффера — из Keitaro, не от клиента), remove, bring_back, pin, unpin, cancel: загрузить → команда корня → save |
 | `push_stream` | только наша кампания → `offers_to_publish` → `publish_offers` → повторное чтение и сверка → `mark_published` → save |
@@ -300,9 +301,9 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 | Маршрут | Сценарий |
 |---|---|
 | `GET /offers?q=` | автодополнение |
-| `GET /campaigns?all=false` | список (по умолчанию наши) |
+| `GET /campaigns?all=false` | список: наши — из БД, `all=true` — все из Keitaro |
 | `POST /campaigns` → 201 | создаватор |
-| `GET /campaigns/{id}` | открыть |
+| `GET /campaigns/{id}` → `{campaign, keitaro_changes}` | открыть со сверкой с Keitaro |
 | `POST /campaigns/{id}/fetch` `{discard_drafts}` | Fetch streams |
 | `GET …/streams/{sid}/draft` | изменения для подтверждения Cancel |
 | `POST …/streams/{sid}/offers`, `DELETE …/offers/{oid}` | Add, Remove |

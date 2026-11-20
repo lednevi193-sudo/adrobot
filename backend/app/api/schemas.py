@@ -77,6 +77,13 @@ class CampaignView(BaseModel):
     streams: list[StreamView]
 
 
+class OpenCampaignResponse(BaseModel):
+    campaign: CampaignView
+    keitaro_changes: list[str] = Field(
+        description="Что поменяли прямо в Keitaro, пока в обёртке лежит черновик. Пусто — синхронизировано"
+    )
+
+
 class CancelResponse(BaseModel):
     campaign: CampaignView
     cancelled: list[DraftChangeDto]

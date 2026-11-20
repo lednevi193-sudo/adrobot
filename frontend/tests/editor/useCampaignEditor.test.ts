@@ -17,7 +17,7 @@ beforeEach(() => vi.resetAllMocks())
 describe('useCampaignEditor', () => {
   it('load кладёт CampaignView и сортирует потоки по position', async () => {
     const view = campaign({ streams: [stream({ id: 2, position: 2 }), stream({ id: 1, position: 1 })] })
-    vi.mocked(campaignsApi.openCampaign).mockResolvedValue(view)
+    vi.mocked(campaignsApi.openCampaign).mockResolvedValue({ campaign: view, keitaro_changes: [] })
     const editor = useCampaignEditor(42)
 
     await editor.load()
@@ -42,7 +42,7 @@ describe('useCampaignEditor', () => {
 
   it('ошибка Push запоминается у потока, кампания не меняется', async () => {
     const before = campaign()
-    vi.mocked(campaignsApi.openCampaign).mockResolvedValue(before)
+    vi.mocked(campaignsApi.openCampaign).mockResolvedValue({ campaign: before, keitaro_changes: [] })
     vi.mocked(streamsApi.push).mockRejectedValue(new ApiError(403, 'not_our_campaign', 'Кампания не наша'))
     const editor = useCampaignEditor(42)
     await editor.load()
@@ -84,6 +84,18 @@ describe('useCampaignEditor', () => {
 
     expect(await editor.fetchStreams()).toEqual({ kind: 'failed' })
     expect(editor.lastError.value).toMatchObject({ streamId: null, error: { status: 504 } })
+  })
+
+  it('изменения в Keitaro при черновике показываются до успешного Fetch', async () => {
+    vi.mocked(campaignsApi.openCampaign).mockResolvedValue({ campaign: campaign(), keitaro_changes: ['поток «Offers» удалён'] })
+    vi.mocked(campaignsApi.fetchStreams).mockResolvedValue(campaign())
+    const editor = useCampaignEditor(42)
+
+    await editor.load()
+    expect(editor.keitaroChanges.value).toEqual(['поток «Offers» удалён'])
+
+    await editor.fetchStreams(true)
+    expect(editor.keitaroChanges.value).toEqual([])
   })
 
   it('Cancel берёт кампанию из CancelResponse', async () => {
