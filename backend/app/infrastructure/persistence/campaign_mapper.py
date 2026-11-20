@@ -30,7 +30,6 @@ def fill_record(record: CampaignRecord, campaign: Campaign) -> None:
     record.name = campaign.name
     record.alias = campaign.alias
     record.domain_url = campaign.domain_url
-    record.created_by_us = campaign.created_by_us
     record.streams = _to_document(campaign)
 
 
@@ -54,9 +53,9 @@ def _assignment_doc(a: OfferAssignment) -> AssignmentDoc:
     return AssignmentDoc(
         offer_id=a.offer.id,
         offer_name=a.offer.name,
-        seq=a.seq,
-        desired=DesiredDoc(included=a.desired.included, share=a.desired.share, pinned=a.desired.pinned),
-        published=None if p is None else PublishedDoc(present=p.present, share=p.share, pinned=p.pinned),
+        order=a.order,
+        desired=DesiredDoc(in_rotation=a.desired.in_rotation, share=a.desired.share, pinned=a.desired.pinned),
+        published=None if p is None else PublishedDoc(in_rotation=p.in_rotation, share=p.share, pinned=p.pinned),
     )
 
 
@@ -70,7 +69,6 @@ def to_domain(record: CampaignRecord) -> Campaign:
         name=record.name,
         alias=record.alias,
         domain_url=record.domain_url,
-        created_by_us=record.created_by_us,
         streams=[_stream(s) for s in doc.streams],
         version=record.version,
     )
@@ -90,7 +88,7 @@ def _assignment(d: AssignmentDoc) -> OfferAssignment:
     p = d.published
     return OfferAssignment(
         offer=OfferRef(OfferId(d.offer_id), d.offer_name),
-        seq=d.seq,
-        desired=DesiredState(d.desired.included, d.desired.share, d.desired.pinned),
-        published=None if p is None else PublishedState(p.present, p.share, p.pinned),
+        order=d.order,
+        desired=DesiredState(d.desired.in_rotation, d.desired.share, d.desired.pinned),
+        published=None if p is None else PublishedState(p.in_rotation, p.share, p.pinned),
     )

@@ -17,13 +17,13 @@ class _Doc(BaseModel):
 
 
 class DesiredDoc(_Doc):
-    included: bool
+    in_rotation: bool
     share: int
     pinned: bool
 
 
 class PublishedDoc(_Doc):
-    present: bool
+    in_rotation: bool
     share: int
     pinned: bool
 
@@ -31,7 +31,7 @@ class PublishedDoc(_Doc):
 class AssignmentDoc(_Doc):
     offer_id: int
     offer_name: str
-    seq: int
+    order: int
     desired: DesiredDoc
     published: PublishedDoc | None
 
@@ -40,7 +40,7 @@ class StreamDoc(_Doc):
     id: int
     name: str
     position: int
-    kind: Literal["offers", "opaque"]
+    kind: Literal["offers", "other"]
     assignments: list[AssignmentDoc]
 
 

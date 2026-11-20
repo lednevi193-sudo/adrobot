@@ -7,13 +7,13 @@ from app.domain.campaigns.errors import (
     NotAnOffersStream,
     OfferAlreadyInStream,
     OfferIsArchived,
-    OfferNotIncluded,
+    OfferNotInRotation,
     PinnedSharesExceed100,
     SharesDoNotSumTo100,
 )
 from app.domain.campaigns import (
     AssignmentStatus as S,
-    ChangeKind,
+    DraftChangeKind,
     KeitaroStream,
     PublishedOffer,
     Stream,
@@ -34,10 +34,10 @@ def make_stream(*pairs: tuple[OfferRef, int]) -> Stream:
 
 
 def view(stream: Stream) -> dict[str, tuple[S, int, bool]]:
-    """{имя: (статус, желаемый вес, закреплён)} в порядке добавления."""
+    """{имя: (статус, желаемый вес, закреплён)} в порядке потока."""
     return {
         a.offer.name: (a.status, a.desired.share, a.desired.pinned)
-        for a in sorted(stream.assignments, key=lambda a: a.seq)
+        for a in sorted(stream.assignments, key=lambda a: a.order)
     }
 
 
@@ -56,11 +56,11 @@ def three() -> Stream:
 
 
 def test_stream_from_keitaro_is_clean_and_active(three: Stream) -> None:
-    assert not three.is_dirty
+    assert not three.has_draft
     assert view(three) == {"A": (S.ACTIVE, 34, False), "B": (S.ACTIVE, 33, False), "C": (S.ACTIVE, 33, False)}
 
 
-def test_stream_without_offers_is_opaque_and_not_editable() -> None:
+def test_stream_without_offers_is_other_and_not_editable() -> None:
     stream = make_stream()
     with pytest.raises(NotAnOffersStream):
         stream.add_offer(A)
@@ -72,12 +72,12 @@ def test_stream_without_offers_is_opaque_and_not_editable() -> None:
 def test_add_offer_rebalances_and_makes_stream_dirty(three: Stream) -> None:
     three.add_offer(D)
 
-    assert three.is_dirty
+    assert three.has_draft
     assert view(three)["D"] == (S.PENDING_ADD, 25, False)
     assert [s for _, s, _ in view(three).values()] == [25, 25, 25, 25]
 
     assert push(three) == [("A", 25), ("B", 25), ("C", 25), ("D", 25)]
-    assert not three.is_dirty
+    assert not three.has_draft
     assert view(three)["D"][0] == S.ACTIVE
 
 
@@ -115,18 +115,18 @@ def test_remove_not_yet_published_offer_forgets_it(three: Stream) -> None:
     three.remove_offer(D.id)
 
     assert "D" not in view(three)
-    assert not three.is_dirty
+    assert not three.has_draft
 
 
 def test_bring_back_of_unpublished_removal_restores_clean_state(three: Stream) -> None:
     three.remove_offer(B.id)
     three.bring_back(B.id)
-    assert not three.is_dirty
+    assert not three.has_draft
 
 
 def test_cannot_remove_twice(three: Stream) -> None:
     three.remove_offer(A.id)
-    with pytest.raises(OfferNotIncluded):
+    with pytest.raises(OfferNotInRotation):
         three.remove_offer(A.id)
 
 
@@ -150,7 +150,7 @@ def test_pinned_share_survives_add_remove_and_bring_back() -> None:
 def test_pin_with_manual_value(three: Stream) -> None:
     three.pin(A.id, 50)
     assert [s for _, s, _ in view(three).values()] == [50, 25, 25]
-    assert three.pending_changes()[0].kind == ChangeKind.PIN
+    assert three.draft_changes()[0].kind == DraftChangeKind.PIN
 
 
 def test_pinned_total_over_100_is_rejected(three: Stream) -> None:
@@ -206,9 +206,10 @@ def test_cancel_reverts_everything_including_pins(three: Stream) -> None:
 
     changes = {c.offer.name: c.kind for c in three.cancel()}
 
-    assert changes == {"A": ChangeKind.PIN, "B": ChangeKind.REMOVE, "C": ChangeKind.SHARE, "D": ChangeKind.ADD}
+    K = DraftChangeKind
+    assert changes == {"A": K.PIN, "B": K.REMOVE, "C": K.SHARE, "D": K.ADD}
     assert view(three) == before
-    assert not three.is_dirty
+    assert not three.has_draft
 
 
 def test_cancel_returns_brought_back_offer_to_archive(three: Stream) -> None:
@@ -227,14 +228,14 @@ def test_offer_deleted_in_keitaro_goes_to_archive(three: Stream) -> None:
     three.sync_from_keitaro(snapshot((A, 50), (C, 50)))
 
     assert view(three)["B"] == (S.REMOVED, 0, False)
-    assert not three.is_dirty
+    assert not three.has_draft
 
 
 def test_offer_added_in_keitaro_appears_as_active(three: Stream) -> None:
     three.sync_from_keitaro(snapshot((A, 25), (B, 25), (C, 25), (D, 25)))
 
     assert view(three)["D"] == (S.ACTIVE, 25, False)
-    assert not three.is_dirty
+    assert not three.has_draft
 
 
 def test_archived_offer_returned_in_keitaro_becomes_active(three: Stream) -> None:
@@ -249,7 +250,7 @@ def test_pinned_share_wins_over_manual_change_in_keitaro(three: Stream) -> None:
 
     three.sync_from_keitaro(snapshot((A, 20), (B, 40), (C, 40)))
 
-    assert three.is_dirty
+    assert three.has_draft
     assert [s for _, s, _ in view(three).values()] == [50, 25, 25]
     a = next(x for x in three.assignments if x.offer.id == A.id)
     assert a.published is not None and a.published.share == 20  # подсказка «в Keitaro сейчас 20%»

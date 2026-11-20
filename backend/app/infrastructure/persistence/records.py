@@ -22,7 +22,6 @@ class CampaignRecord(Base):
     name: Mapped[str] = mapped_column(String(255))
     alias: Mapped[str] = mapped_column(String(255))
     domain_url: Mapped[str | None] = mapped_column(String(255))
-    created_by_us: Mapped[bool] = mapped_column(default=False)
     streams: Mapped[dict[str, Any]] = mapped_column(JSONB)
     version: Mapped[int] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

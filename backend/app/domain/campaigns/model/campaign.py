@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass, field
 
-from app.domain.campaigns.services.changes import Change
+from app.domain.campaigns.model.draft import DraftChange
 from app.domain.campaigns.sync.snapshots import KeitaroCampaign, PublishedOffer
 from app.domain.campaigns.model.stream import Stream
 from app.domain.campaigns.errors import CampaignHasDrafts, StreamNotInCampaign
@@ -20,13 +20,12 @@ class Campaign:
     name: str
     alias: str
     domain_url: str | None
-    created_by_us: bool = False
     streams: list[Stream] = field(default_factory=list)
     version: int = 0  # оптимистическая блокировка, ведёт репозиторий
 
     @classmethod
-    def from_keitaro(cls, snapshot: KeitaroCampaign, *, created_by_us: bool = False) -> "Campaign":
-        campaign = cls(snapshot.id, snapshot.name, snapshot.alias, snapshot.domain_url, created_by_us)
+    def from_keitaro(cls, snapshot: KeitaroCampaign) -> "Campaign":
+        campaign = cls(snapshot.id, snapshot.name, snapshot.alias, snapshot.domain_url)
         campaign.sync_from_keitaro(snapshot)
         return campaign
 
@@ -37,17 +36,21 @@ class Campaign:
             return None
         return f"{self.domain_url.rstrip('/')}/{self.alias}"
 
+    def is_ours(self, prefix: str) -> bool:
+        """«Наша» кампания — название с нашим префиксом (FR-2.1, Q5). Признак виден и в самом Keitaro."""
+        return bool(prefix) and self.name.startswith(prefix)
+
     # ---------- синхронизация (Fetch) ----------
 
     def sync_from_keitaro(self, snapshot: KeitaroCampaign, *, discard_drafts: bool = False) -> None:
         """Fetch: подтянуть состояние из Keitaro (FR-2.2, FR-2.3).
 
-        Если есть черновики, без явного discard_drafts бросает CampaignHasDrafts —
+        Если есть черновик, без явного discard_drafts бросает CampaignHasDrafts —
         UI показывает подтверждение со списком изменений и повторяет вызов (FR-2.3a).
         """
-        if self.is_dirty:
+        if self.has_draft:
             if not discard_drafts:
-                raise CampaignHasDrafts(sum(len(c) for c in self.pending_changes().values()))
+                raise CampaignHasDrafts(sum(len(c) for c in self.draft_changes().values()))
             self.cancel_all()
 
         self.name, self.alias, self.domain_url = snapshot.name, snapshot.alias, snapshot.domain_url
@@ -80,10 +83,10 @@ class Campaign:
     def unpin(self, stream_id: StreamId, offer_id: OfferId) -> None:
         self.stream(stream_id).unpin(offer_id)
 
-    def cancel(self, stream_id: StreamId) -> list[Change]:
+    def cancel(self, stream_id: StreamId) -> list[DraftChange]:
         return self.stream(stream_id).cancel()
 
-    def cancel_all(self) -> dict[StreamId, list[Change]]:
+    def cancel_all(self) -> dict[StreamId, list[DraftChange]]:
         return {s.id: changes for s in self.streams if (changes := s.cancel())}
 
     def offers_to_publish(self, stream_id: StreamId) -> list[PublishedOffer]:
@@ -95,11 +98,11 @@ class Campaign:
     # ---------- чтение ----------
 
     @property
-    def is_dirty(self) -> bool:
-        return any(s.is_dirty for s in self.streams)
+    def has_draft(self) -> bool:
+        return any(s.has_draft for s in self.streams)
 
-    def pending_changes(self) -> dict[StreamId, list[Change]]:
-        return {s.id: changes for s in self.streams if (changes := s.pending_changes())}
+    def draft_changes(self) -> dict[StreamId, list[DraftChange]]:
+        return {s.id: changes for s in self.streams if (changes := s.draft_changes())}
 
     def stream(self, stream_id: StreamId) -> Stream:
         """Поток для чтения. Менять его — только через команды корня."""

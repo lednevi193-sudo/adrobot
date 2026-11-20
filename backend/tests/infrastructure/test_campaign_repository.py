@@ -23,7 +23,7 @@ def make_campaign() -> Campaign:
             KeitaroStream(OFFERS, "Offers", 2, (PublishedOffer(A, 50), PublishedOffer(B, 50))),
         ),
     )
-    return Campaign.from_keitaro(snapshot, created_by_us=True)
+    return Campaign.from_keitaro(snapshot)
 
 
 def store(factory: sessionmaker[Session], campaign: Campaign) -> None:
@@ -50,7 +50,7 @@ def test_aggregate_survives_roundtrip_with_drafts(session_factory: sessionmaker[
 
     assert loaded == campaign  # dataclass сравнивает все поля, включая потоки и привязки
     assert loaded.version == 1
-    assert loaded.pending_changes() == campaign.pending_changes()
+    assert loaded.draft_changes() == campaign.draft_changes()
 
 
 def test_document_has_schema_version(session_factory: sessionmaker[Session]) -> None:
@@ -58,7 +58,7 @@ def test_document_has_schema_version(session_factory: sessionmaker[Session]) -> 
     with session_factory() as s:
         doc = s.scalar(text("SELECT streams FROM campaigns WHERE id = :id"), {"id": CID})
     assert doc["schema_version"] == 1
-    assert [st["kind"] for st in doc["streams"]] == ["opaque", "offers"]
+    assert [st["kind"] for st in doc["streams"]] == ["other", "offers"]
 
 
 def test_save_persists_changes_and_bumps_version(session_factory: sessionmaker[Session]) -> None:

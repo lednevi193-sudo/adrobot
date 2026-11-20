@@ -20,7 +20,7 @@ class MergeResult:
 
 
 def merge_published(
-    assignments: Sequence[OfferAssignment], offers: Sequence[PublishedOffer], next_seq: int
+    assignments: Sequence[OfferAssignment], offers: Sequence[PublishedOffer], next_order: int
 ) -> MergeResult:
     """Применяет к привязкам то, что сейчас лежит в Keitaro.
 
@@ -42,7 +42,7 @@ def merge_published(
             continue
 
         a.offer = ko.offer  # обновить снимок имени
-        if a.desired.included and a.desired.pinned:
+        if a.desired.in_rotation and a.desired.pinned:
             was_pinned = a.published.pinned if a.is_published else False
             a.published = PublishedState(True, ko.share, was_pinned)
             needs_rebalance |= a.desired.share != ko.share
@@ -54,7 +54,7 @@ def merge_published(
     for i, ko in enumerate(from_keitaro.values()):
         merged.append(
             OfferAssignment(
-                ko.offer, next_seq + i, DesiredState(True, ko.share), PublishedState(True, ko.share)
+                ko.offer, next_order + i, DesiredState(True, ko.share), PublishedState(True, ko.share)
             )
         )
     return MergeResult(merged, needs_rebalance)

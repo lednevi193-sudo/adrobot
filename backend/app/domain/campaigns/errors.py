@@ -56,15 +56,15 @@ class OfferIsArchived(DomainError):
         super().__init__(f"Оффер {offer_id} лежит в архиве потока — верните его кнопкой Bring back")
 
 
-class OfferNotIncluded(DomainError):
-    code = "offer_not_included"
+class OfferNotInRotation(DomainError):
+    code = "offer_not_in_rotation"
 
     def __init__(self, offer_id: int) -> None:
         super().__init__(f"Оффер {offer_id} удалён из потока")
 
 
-class OfferAlreadyIncluded(DomainError):
-    code = "offer_already_included"
+class OfferAlreadyInRotation(DomainError):
+    code = "offer_already_in_rotation"
 
     def __init__(self, offer_id: int) -> None:
         super().__init__(f"Оффер {offer_id} и так участвует в потоке")
