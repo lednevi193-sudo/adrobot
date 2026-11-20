@@ -136,7 +136,7 @@ published: PublishedState(in_rotation, share, pinned) — что лежит в K
 app/
 ├── domain/          чистый Python: агрегаты, VO, distribute_shares, ошибки
 ├── application/     сценарии (CreateCampaign, FetchStreams, EditStream, PushStream) и порты (Protocol)
-├── infrastructure/  SQLAlchemy-таблицы, репозитории, Keitaro-клиент (ACL), фейковый Keitaro
+├── infrastructure/  SQLAlchemy-таблицы, репозитории, Keitaro-клиент (ACL)
 └── api/             FastAPI-роутеры, Pydantic-DTO
 ```
 
@@ -150,10 +150,18 @@ app/
 ├── main.py                         сборка приложения FastAPI
 ├── api/                            HTTP: роутеры, DTO
 ├── application/
-│   ├── ports.py                    CampaignRepository (Protocol)
-│   └── errors.py                   ConcurrencyConflict, CampaignNotFound, …
+│   ├── ports/                      один порт — один модуль (Protocol)
+│   │   ├── campaign_repository.py  CampaignRepository
+│   │   └── keitaro_gateway.py      KeitaroGateway, CampaignSummary
+│   └── errors.py                   ConcurrencyConflict, CampaignNotFound, KeitaroError, …
 ├── infrastructure/
 │   ├── db.py                       engine, сессии
+│   ├── keitaro/                    ACL к Keitaro (раздел 9)
+│   │   ├── client.py               транспорт: заголовки, таймаут, ошибки -> KeitaroError
+│   │   ├── schemas.py              форма ответов Keitaro (Pydantic, только нужные поля)
+│   │   ├── from_keitaro.py         JSON -> снимки домена
+│   │   ├── to_keitaro.py           спецификации домена -> тела запросов
+│   │   └── gateway.py              HttpKeitaroGateway — реализация порта
 │   └── persistence/
 │       ├── base.py                 Base + правила именования ограничений
 │       ├── records.py              CampaignRecord — строка таблицы campaigns
@@ -185,7 +193,7 @@ app/
             └── blueprint.py        чертёж новой кампании для создаватора
 ```
 
-Тесты повторяют эту раскладку: `tests/domain/campaigns/…`, `tests/domain/geo/…`.
+Тесты повторяют эту раскладку: `tests/domain/campaigns/…`, `tests/infrastructure/keitaro/…`. Фейки портов — в `tests/fakes/`.
 
 ## 8. Хранение
 
@@ -224,3 +232,31 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 ```
 
 Почему JSONB, а не таблицы потоков и привязок: агрегат небольшой (единицы потоков, десятки офферов), сохраняется целиком, запросов «поперёк» агрегатов по потокам и офферам нет. Почему не MongoDB: стек ТЗ — SQLAlchemy; реляционные части (FK, UNIQUE, транзакции, версия) остаются в Postgres.
+
+## 9. Keitaro ACL
+
+Порт `KeitaroGateway` (`application/ports`) говорит на языке домена: снимки `KeitaroCampaign`, спецификации потоков из `CampaignBlueprint`, `PublishedOffer`. Реализация `HttpKeitaroGateway` (`infrastructure/keitaro`) — единственное место, которое знает про HTTP, JSON и значения Keitaro.
+
+| Слой ACL | Ответственность | Аналог в .NET |
+|---|---|---|
+| `client.py` | `httpx.Client` с `base_url`, `Api-Key`, явным `User-Agent`, таймаутом; 4xx/5xx -> `KeitaroError` с текстом Keitaro, таймаут/сеть -> `KeitaroUnavailable` | typed `HttpClient` + `DelegatingHandler` |
+| `schemas.py` | Pydantic-модели ответов, `extra="ignore"`: новые поля Keitaro чтение не ломают, пропавшие нужные — `KeitaroError` «неожиданный формат» | DTO для `ReadFromJsonAsync` |
+| `from_keitaro.py`, `to_keitaro.py` | перевод в обе стороны | AutoMapper-профили, только руками |
+| `gateway.py` | сборка снимка из нескольких запросов: кампания + потоки + справочник офферов (имена) | реализация `IKeitaroApi` |
+
+**Правила перевода из Keitaro:**
+- поток в архиве (`state = deleted`) для обёртки не существует;
+- в раздаче только офферы потока со `state = active` — выключенный оффер трафик не получает;
+- имя оффера берётся из `GET /offers`; оффера, скрытого от ключа (Q6), там нет — имя пустое, UI показывает `[id]`;
+- 404 на кампанию -> `CampaignNotFound` (стенд отдаёт HTML nginx, разметка в сообщение не попадает).
+
+**Правила перевода в Keitaro:**
+- `alias` обязателен при создании кампании (документация Keitaro) — генерируем 8 символов `[A-Za-z0-9]`, как у алиасов самого Keitaro;
+- гео-поток: `type=forced`, `schema=redirect`, фильтр `country/accept`; поток офферов: `type=regular`, `schema=landings`, `offers[{offer_id, share, state}]`;
+- Push — `PUT /streams/{id}` только с полем `offers`: по документации PUT меняет лишь переданные поля.
+
+**Не подтверждено документацией** (проверить на своей кампании, шаг 8): заменяет ли `offers` в PUT список целиком, то есть удаляются ли неперечисленные офферы. До проверки страхует сверка после Push (FR-2.13, п. 3).
+
+**Сознательно не делаем:** повторы запросов (POST не идемпотентен, а повтор PUT с весами оставим пользователю — кнопка Push), кеш справочника офферов (один запрос на Fetch).
+
+**Тесты:** `tests/infrastructure/keitaro` — `httpx.MockTransport` (≈ свой `HttpMessageHandler`) с JSON в форме стенда; `tests/fakes/keitaro_gateway.py` — Keitaro в памяти для сценариев приложения, с `fail_on` для проверки компенсации FR-1.6.

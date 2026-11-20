@@ -23,6 +23,22 @@ class CampaignAlreadyExists(ApplicationError):
         super().__init__(f"Кампания {campaign_id} уже есть в обёртке")
 
 
+class KeitaroError(ApplicationError):
+    """Keitaro отказал. В сообщении — текст ответа Keitaro (FR-1.8)."""
+
+    code = "keitaro_error"
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class KeitaroUnavailable(KeitaroError):
+    """Keitaro не ответил: таймаут или сетевая ошибка."""
+
+    code = "keitaro_unavailable"
+
+
 class ConcurrencyConflict(ApplicationError):
     code = "concurrency_conflict"
 
