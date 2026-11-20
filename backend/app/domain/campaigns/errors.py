@@ -1,6 +1,12 @@
 """Нарушения правил агрегата «Кампания» и создаватора."""
 
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
+
 from app.domain.common.errors import DomainError
+
+if TYPE_CHECKING:  # только для аннотаций: без цикла импортов model -> errors -> model
+    from app.domain.campaigns.model.draft import DraftChange
 
 
 class InvalidCampaignName(DomainError):
@@ -20,12 +26,14 @@ class StreamNotInCampaign(DomainError):
 class CampaignHasDrafts(DomainError):
     code = "campaign_has_drafts"
 
-    def __init__(self, changes_count: int) -> None:
+    def __init__(self, changes: "Mapping[int, Sequence[DraftChange]]") -> None:
+        """changes — черновик по потокам: его UI показывает в подтверждении (FR-2.3a)."""
+        self.changes = dict(changes)
+        self.changes_count = sum(len(c) for c in self.changes.values())
         super().__init__(
-            f"В кампании есть неопубликованные изменения ({changes_count}). "
+            f"В кампании есть неопубликованные изменения ({self.changes_count}). "
             "Синхронизация с Keitaro их отменит — подтвердите действие"
         )
-        self.changes_count = changes_count
 
 
 class NotAnOffersStream(DomainError):

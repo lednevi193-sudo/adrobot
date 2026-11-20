@@ -57,7 +57,7 @@ class Campaign:
         """
         if self.has_draft:
             if not discard_drafts:
-                raise CampaignHasDrafts(sum(len(c) for c in self.draft_changes().values()))
+                raise CampaignHasDrafts(self.draft_changes())
             self.cancel_all()
 
         self.name, self.alias, self.domain_url = snapshot.name, snapshot.alias, snapshot.domain_url

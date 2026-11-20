@@ -148,7 +148,12 @@ app/
 app/
 ├── config.py                       настройки из .env
 ├── main.py                         сборка приложения FastAPI
-├── api/                            HTTP: роутеры, DTO
+├── api/
+│   ├── routers/                    health, offers, campaigns, streams — тонкие: DTO -> сценарий -> DTO
+│   ├── schemas.py                  DTO запросов и ответов (CampaignView, …)
+│   ├── presenters.py               агрегат -> CampaignView (push_blocker, keitaro_share)
+│   ├── errors.py                   DomainError/ApplicationError -> HTTP-статус и тело {code, message}
+│   └── dependencies.py             Depends: Session на запрос, шлюз Keitaro на процесс
 ├── application/
 │   ├── ports/                      один порт — один модуль (Protocol)
 │   │   ├── campaign_repository.py  CampaignRepository
@@ -287,3 +292,34 @@ campaigns  (id = keitaro_id PK, name, alias, domain_url,
 - Команды редактора Keitaro не трогают и проверку «наша ли» не делают: черновик безвреден.
 
 **Тесты:** `tests/fakes/campaign_repository.py` — репозиторий в памяти с семантикой Session: записи видны после commit, rollback их выбрасывает, `get` отдаёт копию, версии как у `version_id_col`. Поэтому тесты проверяют и «в БД ничего не попало», а не только вызовы.
+
+## 11. HTTP API
+
+Все маршруты под `/api`, Swagger — `/docs`. Команды редактора возвращают `CampaignView` целиком: фронт перерисовывает присланное, своего состояния не держит.
+
+| Маршрут | Сценарий |
+|---|---|
+| `GET /offers?q=` | автодополнение |
+| `GET /campaigns?all=false` | список (по умолчанию наши) |
+| `POST /campaigns` → 201 | создаватор |
+| `GET /campaigns/{id}` | открыть |
+| `POST /campaigns/{id}/fetch` `{discard_drafts}` | Fetch streams |
+| `GET …/streams/{sid}/draft` | изменения для подтверждения Cancel |
+| `POST …/streams/{sid}/offers`, `DELETE …/offers/{oid}` | Add, Remove |
+| `POST …/offers/{oid}/bring-back` | Bring back |
+| `PUT` / `DELETE …/offers/{oid}/pin` | Pin / Unpin |
+| `POST …/streams/{sid}/cancel`, `POST …/streams/{sid}/push` | Cancel, Push |
+
+`StreamView.push_blocker` — сообщение правила FR-2.12, если Push сейчас невозможен (считается тем же `offers_to_publish`, фронт правила не дублирует). `StreamOfferView.keitaro_share` — вес в Keitaro для подсказки FR-2.9a.
+
+| Ошибка | HTTP |
+|---|---|
+| `DomainError` (правило нарушено) | 422 |
+| `CampaignHasDrafts` (+ `changes` для окна подтверждения) | 409 |
+| `ConcurrencyConflict`, `CampaignAlreadyExists` | 409 |
+| `CampaignNotFound`, `OfferNotFound`, `StreamNotInCampaign`, `OfferNotInStream` | 404 |
+| `NotOurCampaign` | 403 |
+| `KeitaroError`, `CampaignCreationFailed`, `PushNotConfirmed` (+ `differences`) | 502 |
+| `KeitaroUnavailable` | 504 |
+
+Эндпоинты — обычные `def`: FastAPI выполняет их в пуле потоков, синхронные SQLAlchemy и httpx на время I/O отпускают GIL. Тесты (`tests/api`) — `TestClient` с `app.dependency_overrides` на фейки (≈ `WebApplicationFactory`).
